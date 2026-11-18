@@ -6,6 +6,12 @@
 
 Token Launch Radar ranks 758 DeFi protocols by the implied value of a token they might one day issue, and gives farm steps for each: 226 rows, all 40 watchlist protocols covered. The model's multiples come from the snapshot itself — the median market-cap-to-TVL ratio of each category's live protocols — so no number is typed in by hand.
 
+## Screenshots
+
+![Ranked board](screenshots/1-board.png)
+![Protocol detail](screenshots/2-detail.png)
+![Filtered view](screenshots/3-filtered.png)
+
 ## Run it
 
 ```sh
