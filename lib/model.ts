@@ -806,10 +806,111 @@ function fmtUsd(n: number): string {
   return `$${n}`;
 }
 
+/** The wallet a chain needs, in the words a farmer can set up. */
+function walletFor(chain: string): string {
+  const c = chain.toLowerCase();
+  if (c === 'ethereum') return 'Ethereum wallet (MetaMask or Rabby) on Ethereum';
+  if (c === 'solana') return 'Solana wallet (Phantom or Solflare) on Solana';
+  if (c === 'bitcoin') return 'Bitcoin wallet on Bitcoin';
+  return `wallet on ${chain}`;
+}
+
+/** The two cheapest chains to start on, by gas setup cost, earliest first on a tie. */
+function cheapestTwo(chains: string[]): { first: string; second: string | null } {
+  const ranked = chains
+    .map((c, i) => ({ c, i, setup: Number(gasFor(c).setup) }))
+    .sort((a, b) => a.setup - b.setup || a.i - b.i);
+  return { first: ranked[0]?.c ?? 'its main chain', second: ranked.length > 1 ? ranked[1]!.c : null };
+}
+
 /**
- * A protocol's farm plan: six steps, each an action with a cost and a time. The plan is derived
- * from the protocol's own record (category, chains, TVL, age, implied value), never from a
- * hand-written list of names. The dashboard's page generates the same six steps from the same
+ * The sequencing step: which chain to start on and in what order to expand. A multi-chain
+ * protocol starts on its cheapest chain by gas and expands to the next-cheapest after a week
+ * of activity; a single-chain protocol has no chain order, so the step sequences the actions.
+ */
+function sequenceFor(p: SnapshotProtocol): FarmStep {
+  const chains = p.chains;
+  const chain = chainOf(p);
+  if (chains.length <= 1) {
+    return {
+      text: `Start on ${chain}: it is the protocol's only chain, so sequence by action instead of by chain - open the position first, then do the weekly action, and keep every step in the one wallet from step 1.`,
+      cost: gasFor(chain).weekly,
+      time: '10 minutes a week',
+    };
+  }
+  const { first, second } = cheapestTwo(chains);
+  const cheapGas = gasFor(first);
+  return {
+    text: `Start on ${first}: gas there is ${cheapGas.first}, the cheapest of the ${chains.length} chains this protocol runs on. Build the position there first, then expand to ${second} after a week of activity, and leave the pricier chains until the farm is running.`,
+    cost: cheapGas.first,
+    time: '15 minutes to set up',
+  };
+}
+
+/**
+ * The one risk the row's own figures point at, picked in order of relevance: a sharply
+ * falling TVL first, then a very young protocol, then a TVL so large the points are shared
+ * thin, then a mature protocol with a high implied value, then a sudden inflow, and finally
+ * the steady case, where the risk is the points terms changing.
+ */
+function riskFor(
+  p: SnapshotProtocol,
+  age: number | null,
+  implied: number,
+  capital: number,
+  hold: number,
+): FarmStep {
+  const growth = p.change_7d;
+  if (growth !== null && growth <= -10) {
+    return {
+      text: `TVL fell ${Math.abs(growth).toFixed(1)}% in the last 7 days: find out why before adding capital - start at the smallest tier and add nothing until the TVL steadies.`,
+      cost: 'start with $50 only',
+      time: '15 minutes to check, then wait a week',
+    };
+  }
+  if (age !== null && age < 180) {
+    return {
+      text: `Listed only ${age} days ago: a new protocol can change its points terms, so hold longer and re-check the terms each month before adding capital.`,
+      cost: `the $${capital} stays in for ${hold} days`,
+      time: `${hold} days`,
+    };
+  }
+  if (p.tvl_usd >= 1_000_000_000) {
+    return {
+      text: `TVL is ${fmtUsd(p.tvl_usd)}: that size draws many farmers, so expect the points to be shared thin - keep the position at the smallest tier that still qualifies.`,
+      cost: 'start with $50 only',
+      time: '10 minutes to check the points page',
+    };
+  }
+  if (age !== null && age >= 365 && implied >= 10_000_000) {
+    return {
+      text: `Running ${age} days with ${fmtUsd(implied)} of implied value: the protocol is mature, so expect a slow farm rather than a surprise - size it as a long hold, not a quick flip.`,
+      cost: `the $${capital} stays in for ${hold} days`,
+      time: `${hold} days`,
+    };
+  }
+  if (growth !== null && growth >= 50) {
+    return {
+      text: `TVL jumped ${growth.toFixed(1)}% in 7 days: inflows that fast often follow a short incentive, so confirm the points terms before adding more capital.`,
+      cost: 'nothing to add until the terms are confirmed',
+      time: '15 minutes to check',
+    };
+  }
+  const move =
+    growth === null
+      ? 'no 7-day change on record'
+      : `7-day change ${growth >= 0 ? '+' : ''}${growth.toFixed(1)}%`;
+  return {
+    text: `The snapshot shows no sharp move - TVL ${fmtUsd(p.tvl_usd)} and ${move}: the main risk is the points terms changing, so keep the position at the $${capital} tier and re-check the points page each month before adding more.`,
+    cost: `the $${capital} stays in the position`,
+    time: '10 minutes a month',
+  };
+}
+
+/**
+ * A protocol's farm plan: eight steps, each an action with a cost and a time. The plan is derived
+ * from the protocol's own record (category, chains, TVL, 7-day change, age, implied value), never from a
+ * hand-written list of names. The dashboard's page generates the same eight steps from the same
  * fields, so the plan the board carries and the plan the page shows are one plan.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null, implied: number): FarmStep[] {
@@ -817,14 +918,17 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, implied: numb
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const gas = gasFor(chain);
+  const where = p.chains.length > 1 ? `${p.chains[0]} and ${p.chains[1]}` : chain;
   return [
     {
-      text: `Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.`,
+      text: `Use a fresh ${walletFor(chain)} that holds only the funds you plan to farm, and keep its seed phrase offline.`,
       cost: gas.first,
       time: '5 minutes',
     },
+    sequenceFor(p),
+    riskFor(p, age, implied, capital, hold),
     {
-      text: actionFor(p, capital, chain),
+      text: actionFor(p, capital, where),
       cost: `$${capital} of capital and about $${gas.setup} of gas`,
       time: '15 minutes to set up',
     },

@@ -150,14 +150,47 @@
     if (s.length < 20) s = s + " Hold the position and check the protocol's own page.";
     return s;
   }
+  function walletFor(chain) {
+    var c = (chain || '').toLowerCase();
+    if (c === 'ethereum') return 'Ethereum wallet (MetaMask or Rabby) on Ethereum';
+    if (c === 'solana') return 'Solana wallet (Phantom or Solflare) on Solana';
+    if (c === 'bitcoin') return 'Bitcoin wallet on Bitcoin';
+    return 'wallet on ' + chain;
+  }
+  function cheapestTwo(chains) {
+    var ranked = chains.map(function (c, i) { return { c: c, i: i, setup: Number(gasFor(c).setup) }; }).sort(function (a, b) { return a.setup - b.setup || a.i - b.i; });
+    return { first: ranked[0] ? ranked[0].c : 'its main chain', second: ranked.length > 1 ? ranked[1].c : null };
+  }
+  function sequenceFor(p) {
+    var chains = p.chains || [];
+    var chain = chainOf(p);
+    if (chains.length <= 1) return { text: "Start on " + chain + ": it is the protocol's only chain, so sequence by action instead of by chain - open the position first, then do the weekly action, and keep every step in the one wallet from step 1.", cost: gasFor(chain).weekly, time: '10 minutes a week' };
+    var two = cheapestTwo(chains);
+    var cheapGas = gasFor(two.first);
+    return { text: 'Start on ' + two.first + ': gas there is ' + cheapGas.first + ', the cheapest of the ' + chains.length + ' chains this protocol runs on. Build the position there first, then expand to ' + two.second + ' after a week of activity, and leave the pricier chains until the farm is running.', cost: cheapGas.first, time: '15 minutes to set up' };
+  }
+  function riskFor(p, age, implied, capital, hold) {
+    var growth = (p.change_7d === null || p.change_7d === undefined) ? null : p.change_7d;
+    var a = (age === null || age === undefined) ? null : age;
+    if (growth !== null && growth <= -10) return { text: 'TVL fell ' + Math.abs(growth).toFixed(1) + '% in the last 7 days: find out why before adding capital - start at the smallest tier and add nothing until the TVL steadies.', cost: 'start with $50 only', time: '15 minutes to check, then wait a week' };
+    if (a !== null && a < 180) return { text: 'Listed only ' + a + ' days ago: a new protocol can change its points terms, so hold longer and re-check the terms each month before adding capital.', cost: 'the $' + capital + ' stays in for ' + hold + ' days', time: hold + ' days' };
+    if (p.tvl_usd >= 1e9) return { text: 'TVL is ' + fmtUsd(p.tvl_usd) + ': that size draws many farmers, so expect the points to be shared thin - keep the position at the smallest tier that still qualifies.', cost: 'start with $50 only', time: '10 minutes to check the points page' };
+    if (a !== null && a >= 365 && implied >= 1e7) return { text: 'Running ' + a + ' days with ' + fmtUsd(implied) + ' of implied value: the protocol is mature, so expect a slow farm rather than a surprise - size it as a long hold, not a quick flip.', cost: 'the $' + capital + ' stays in for ' + hold + ' days', time: hold + ' days' };
+    if (growth !== null && growth >= 50) return { text: 'TVL jumped ' + growth.toFixed(1) + '% in 7 days: inflows that fast often follow a short incentive, so confirm the points terms before adding more capital.', cost: 'nothing to add until the terms are confirmed', time: '15 minutes to check' };
+    var move = (growth === null || growth === undefined) ? 'no 7-day change on record' : '7-day change ' + (growth >= 0 ? '+' : '') + growth.toFixed(1) + '%';
+    return { text: 'The snapshot shows no sharp move - TVL ' + fmtUsd(p.tvl_usd) + ' and ' + move + ': the main risk is the points terms changing, so keep the position at the $' + capital + ' tier and re-check the points page each month before adding more.', cost: 'the $' + capital + ' stays in the position', time: '10 minutes a month' };
+  }
   function farmSteps(p) {
     var chain = chainOf(p);
     var capital = capitalFor(p);
     var hold = holdDaysFor(p.age_days);
     var gas = gasFor(chain);
+    var where = (p.chains && p.chains.length > 1) ? p.chains[0] + ' and ' + p.chains[1] : chain;
     return [
-      { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: gas.first, time: '5 minutes' },
-      { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + gas.setup + ' of gas', time: '15 minutes to set up' },
+      { text: 'Use a fresh ' + walletFor(chain) + ' that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: gas.first, time: '5 minutes' },
+      sequenceFor(p),
+      riskFor(p, p.age_days, p.implied_value_usd, capital, hold),
+      { text: actionFor(p, capital, where), cost: '$' + capital + ' of capital and about $' + gas.setup + ' of gas', time: '15 minutes to set up' },
       { text: weeklyFor(p), cost: gas.weekly, time: '10 minutes a week' },
       { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
       { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
