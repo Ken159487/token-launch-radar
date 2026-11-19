@@ -1,5 +1,4 @@
-/* Token Radar's theme: a dark radar screen. One palette, two radii, two families; the rest is
-   spacing, a hairline and a type step. Nothing here reaches the network. */
+/* Token Radar theme: a dark radar screen. One palette, two radii, two families. Nothing here reaches the network. */
 :root {
   --canvas: #0c1210;
   --surface: #131d18;
@@ -9,7 +8,6 @@
   --faint: #6b7f74;
   --border: #26332c;
   --accent: #3ddc97;
-  --accent-dim: #1d5c40;
   --gold: #e8c15a;
   --negative: #f27d6d;
   --radius-control: 8px;
@@ -79,8 +77,7 @@ button { cursor: pointer; }
 .tabs button[aria-pressed="true"] { background: var(--accent); color: #0c1210; font-weight: 600; }
 .count { margin-left: auto; color: var(--muted); font-size: 13px; align-self: center; }
 
-/* The fitted model on first paint: one row of four facts and a one-line note, in the same
-   surface, border and type steps as the rest of the page. */
+/* The fitted model on first paint: one row of facts and a one-line note. */
 .model-strip {
   display: grid; grid-template-columns: 1.35fr 1fr 1.15fr 1fr; gap: var(--step-2) var(--step-5);
   padding: var(--step-3) var(--step-4); margin-bottom: var(--step-4);
@@ -90,9 +87,16 @@ button { cursor: pointer; }
 .ms-fact span { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .ms-fact b { font-family: var(--font-num); font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ms-note { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+/* Round 5: the KPI strip reuses the model strip's surface, border and fact type, with six
+   equal columns instead of four, so the six headline figures read as one row. */
+.kpi { grid-template-columns: repeat(6, 1fr); }
+/* Round 6: the same-size check line under each implied value; differs rows read in red,
+   and the long sixth KPI value wraps instead of truncating. */
+.check-line { font-size: 11px; color: var(--muted); font-family: var(--font-num); white-space: nowrap; }
+.check-line.differs { color: var(--negative); font-weight: 600; }
+.kpi .ms-fact b { white-space: normal; }
 
-/* Comparables: one compact panel per category, headed by the multiple the category's live
-   names support. Rows are tighter than the board's, so a category reads at a glance. */
+/* Comparables: one compact panel per category, headed by the multiple its live names support. */
 .comp-list { display: grid; gap: var(--step-3); }
 .comp-intro { max-width: 78ch; }
 .comp { padding: var(--step-3) var(--step-4) var(--step-2); }
@@ -127,8 +131,6 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 10
 .status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .status.early::before { background: var(--gold); }
-.tag { display: inline-block; padding: 1px 7px; border: 1px solid var(--accent-dim); border-radius: 999px; color: var(--accent); font-size: 11px; font-family: var(--font-num); white-space: nowrap; }
-.tag.early { border-color: var(--border); color: var(--muted); }
 
 .pager { display: flex; align-items: center; justify-content: space-between; gap: var(--step-3); padding: var(--step-3) var(--step-4); border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
 .pager .pages { display: flex; gap: var(--step-1); }
@@ -168,8 +170,7 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 10
 .equation span { color: var(--muted); }
 .equation .total { border-top: 1px solid var(--border); padding-top: var(--step-2); }
 .equation .total b { color: var(--accent); }
-/* The farm plan runs in two columns, so all six steps fit the panel at desktop height
-   instead of running past the fold: the list reads 1-2, 3-4, 5-6 down the rows. */
+/* The farm plan runs in two columns, so all eight steps fit the panel at desktop height instead of running past the fold. */
 .steps { margin: 0; padding-left: var(--step-5); display: grid; grid-template-columns: 1fr 1fr; gap: var(--step-2) var(--step-4); font-size: 12px; line-height: 1.5; }
 .steps li { padding-left: var(--step-1); }
 .steps b { display: block; font-weight: 500; }
@@ -182,13 +183,8 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 10
   .field input { min-width: 0; width: 100%; }
   .bar { width: 64px; }
 }
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
-}
 
-/* Round 4: the rank range under each badge, the farm net and verdict, and the snapshot
-   coverage line. Verdict colours match the board's own bands: Farm is clearly worth it,
-   Thin is marginal, Skip costs more than the share is worth. */
+/* Round 4: the rank range under each badge, the farm net and verdict, and the snapshot coverage line. Verdict colours match the board's own bands. */
 .rank-cell { display: grid; justify-items: center; }
 .rank-range { font-family: var(--font-num); font-size: 11px; color: var(--muted); white-space: nowrap; }
 .verdict { font-weight: 600; white-space: nowrap; }
