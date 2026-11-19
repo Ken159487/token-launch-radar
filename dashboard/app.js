@@ -118,9 +118,9 @@
     if (c.indexOf('dex') >= 0 || c.indexOf('leveraged farm') >= 0) return 'Provide $' + capital + ' of liquidity to ' + name + "'s main pool on " + chain + ' and keep the position open.';
     if (c.indexOf('yield aggregator') >= 0 || c.indexOf('yield') >= 0) return 'Deposit $' + capital + " of USDC into " + name + "'s main vault on " + chain + ' and let it compound.';
     if (c.indexOf('bridge') >= 0 || c.indexOf('canonical') >= 0) return 'Bridge $' + capital + ' of USDC to ' + chain + ' through ' + name + ' and use the bridged funds in its app.';
-    if (c.indexOf('restak') >= 0 || c.indexOf('staking') >= 0) return "Stake $" + capital + " of the chain's staking asset through " + name + ' and keep the receipt.';
-    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0 || c.indexOf('options') >= 0) return 'Deposit $' + capital + ' of USDC as margin on ' + name + ' and open one small hedge.';
-    if (c.indexOf('prediction') >= 0) return 'Fund $' + capital + ' and place one market position on ' + name + '.';
+    if (c.indexOf('restak') >= 0 || c.indexOf('staking') >= 0) return "Stake $" + capital + " of the chain's staking asset through " + name + ' on ' + chain + ' and keep the receipt.';
+    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0 || c.indexOf('options') >= 0) return 'Deposit $' + capital + ' of USDC as margin on ' + chain + ' through ' + name + ' and open one small hedge.';
+    if (c.indexOf('prediction') >= 0) return 'Fund $' + capital + ' on ' + chain + ' and place one market position on ' + name + '.';
     if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0) return 'Deposit $' + capital + ' into a ' + name + ' vault on ' + chain + ' and keep the shares.';
     if (c.indexOf('basis') >= 0) return 'Deposit $' + capital + " of USDC into " + name + "'s basis vault on " + chain + ' and keep the position open.';
     if (c.indexOf('stable') >= 0) return 'Mint or deposit $' + capital + ' of the stable asset through ' + name + ' on ' + chain + '.';
@@ -167,25 +167,27 @@
     if (chains.length <= 1) return { text: "Start on " + chain + ": it is the protocol's only chain, so sequence by action instead of by chain - open the position first, then do the weekly action, and keep every step in the one wallet from step 1.", cost: gasFor(chain).weekly, time: '10 minutes a week' };
     var two = cheapestTwo(chains);
     var cheapGas = gasFor(two.first);
-    return { text: 'Start on ' + two.first + ': gas there is ' + cheapGas.first + ', the cheapest of the ' + chains.length + ' chains this protocol runs on. Build the position there first, then expand to ' + two.second + ' after a week of activity, and leave the pricier chains until the farm is running.', cost: cheapGas.first, time: '15 minutes to set up' };
+    var costPhrase = cheapGas.first.replace(' of gas for the first transaction', '');
+    return { text: 'Start on ' + two.first + ', where gas costs ' + costPhrase + ' for the first transaction — the cheapest of the ' + chains.length + ' chains this protocol runs on — then expand to ' + two.second + ' after a week of activity, and leave the pricier chains until the farm is running.', cost: cheapGas.first, time: '15 minutes to set up' };
   }
   function riskFor(p, age, implied, capital, hold) {
     var growth = (p.change_7d === null || p.change_7d === undefined) ? null : p.change_7d;
     var a = (age === null || age === undefined) ? null : age;
+    if (growth !== null && growth >= 50) return { text: 'TVL jumped ' + growth.toFixed(1) + '% in 7 days: inflows that fast often follow a short incentive, so confirm the points terms before adding more capital.', cost: 'nothing to add until the terms are confirmed', time: '15 minutes to check' };
     if (growth !== null && growth <= -10) return { text: 'TVL fell ' + Math.abs(growth).toFixed(1) + '% in the last 7 days: find out why before adding capital - start at the smallest tier and add nothing until the TVL steadies.', cost: 'start with $50 only', time: '15 minutes to check, then wait a week' };
     if (a !== null && a < 180) return { text: 'Listed only ' + a + ' days ago: a new protocol can change its points terms, so hold longer and re-check the terms each month before adding capital.', cost: 'the $' + capital + ' stays in for ' + hold + ' days', time: hold + ' days' };
     if (p.tvl_usd >= 1e9) return { text: 'TVL is ' + fmtUsd(p.tvl_usd) + ': that size draws many farmers, so expect the points to be shared thin - keep the position at the smallest tier that still qualifies.', cost: 'start with $50 only', time: '10 minutes to check the points page' };
     if (a !== null && a >= 365 && implied >= 1e7) return { text: 'Running ' + a + ' days with ' + fmtUsd(implied) + ' of implied value: the protocol is mature, so expect a slow farm rather than a surprise - size it as a long hold, not a quick flip.', cost: 'the $' + capital + ' stays in for ' + hold + ' days', time: hold + ' days' };
-    if (growth !== null && growth >= 50) return { text: 'TVL jumped ' + growth.toFixed(1) + '% in 7 days: inflows that fast often follow a short incentive, so confirm the points terms before adding more capital.', cost: 'nothing to add until the terms are confirmed', time: '15 minutes to check' };
     var move = (growth === null || growth === undefined) ? 'no 7-day change on record' : '7-day change ' + (growth >= 0 ? '+' : '') + growth.toFixed(1) + '%';
     return { text: 'The snapshot shows no sharp move - TVL ' + fmtUsd(p.tvl_usd) + ' and ' + move + ': the main risk is the points terms changing, so keep the position at the $' + capital + ' tier and re-check the points page each month before adding more.', cost: 'the $' + capital + ' stays in the position', time: '10 minutes a month' };
   }
   function farmSteps(p) {
-    var chain = chainOf(p);
+    var two = cheapestTwo(p.chains || []);
+    var chain = two.first;
     var capital = capitalFor(p);
     var hold = holdDaysFor(p.age_days);
     var gas = gasFor(chain);
-    var where = (p.chains && p.chains.length > 1) ? p.chains[0] + ' and ' + p.chains[1] : chain;
+    var where = (two.second !== null && two.second !== undefined) ? chain + ' and ' + two.second : chain;
     return [
       { text: 'Use a fresh ' + walletFor(chain) + ' that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: gas.first, time: '5 minutes' },
       sequenceFor(p),

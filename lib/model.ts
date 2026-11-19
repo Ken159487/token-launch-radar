@@ -766,11 +766,11 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
   if (c.includes('bridge') || c.includes('canonical'))
     return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
   if (c.includes('restak') || c.includes('staking'))
-    return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
+    return `Stake $${capital} of the chain's staking asset through ${name} on ${chain} and keep the receipt.`;
   if (c.includes('perpetual') || c.includes('derivative') || c.includes('options'))
-    return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
+    return `Deposit $${capital} of USDC as margin on ${chain} through ${name} and open one small hedge.`;
   if (c.includes('prediction'))
-    return `Fund $${capital} and place one market position on ${name}.`;
+    return `Fund $${capital} on ${chain} and place one market position on ${name}.`;
   if (c.includes('curator') || c.includes('allocator'))
     return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
   if (c.includes('basis'))
@@ -856,18 +856,22 @@ function sequenceFor(p: SnapshotProtocol): FarmStep {
   }
   const { first, second } = cheapestTwo(chains);
   const cheapGas = gasFor(first);
+  // gasFor's first-transaction phrase already contains "of gas", so strip it here:
+  // "gas costs a few cents for the first transaction", never "gas there is a few cents of gas".
+  const costPhrase = cheapGas.first.replace(' of gas for the first transaction', '');
   return {
-    text: `Start on ${first}: gas there is ${cheapGas.first}, the cheapest of the ${chains.length} chains this protocol runs on. Build the position there first, then expand to ${second} after a week of activity, and leave the pricier chains until the farm is running.`,
+    text: `Start on ${first}, where gas costs ${costPhrase} for the first transaction — the cheapest of the ${chains.length} chains this protocol runs on — then expand to ${second} after a week of activity, and leave the pricier chains until the farm is running.`,
     cost: cheapGas.first,
     time: '15 minutes to set up',
   };
 }
 
 /**
- * The one risk the row's own figures point at, picked in order of relevance: a sharply
- * falling TVL first, then a very young protocol, then a TVL so large the points are shared
- * thin, then a mature protocol with a high implied value, then a sudden inflow, and finally
- * the steady case, where the risk is the points terms changing.
+ * The one risk the row's own figures point at, picked in order of relevance: an extreme
+ * inflow first (a 7-day jump of 50% or more can follow a short incentive), then a sharply
+ * falling TVL, then a very young protocol, then a TVL so large the points are shared
+ * thin, then a mature protocol with a high implied value, and finally the steady case,
+ * where the risk is the points terms changing.
  */
 function riskFor(
   p: SnapshotProtocol,
@@ -877,6 +881,13 @@ function riskFor(
   hold: number,
 ): FarmStep {
   const growth = p.change_7d;
+  if (growth !== null && growth >= 50) {
+    return {
+      text: `TVL jumped ${growth.toFixed(1)}% in 7 days: inflows that fast often follow a short incentive, so confirm the points terms before adding more capital.`,
+      cost: 'nothing to add until the terms are confirmed',
+      time: '15 minutes to check',
+    };
+  }
   if (growth !== null && growth <= -10) {
     return {
       text: `TVL fell ${Math.abs(growth).toFixed(1)}% in the last 7 days: find out why before adding capital - start at the smallest tier and add nothing until the TVL steadies.`,
@@ -905,13 +916,6 @@ function riskFor(
       time: `${hold} days`,
     };
   }
-  if (growth !== null && growth >= 50) {
-    return {
-      text: `TVL jumped ${growth.toFixed(1)}% in 7 days: inflows that fast often follow a short incentive, so confirm the points terms before adding more capital.`,
-      cost: 'nothing to add until the terms are confirmed',
-      time: '15 minutes to check',
-    };
-  }
   const move =
     growth === null
       ? 'no 7-day change on record'
@@ -930,11 +934,14 @@ function riskFor(
  * fields, so the plan the board carries and the plan the page shows are one plan.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null, implied: number): FarmStep[] {
-  const chain = chainOf(p);
+  // One chain order per row: the cheapest chain by gas setup cost starts the farm (ties keep
+  // list order), so steps 1, 2 and 4 all agree on the same start chain and second chain.
+  const { first: startChain, second: secondChain } = cheapestTwo(p.chains);
+  const chain = startChain;
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const gas = gasFor(chain);
-  const where = p.chains.length > 1 ? `${p.chains[0]} and ${p.chains[1]}` : chain;
+  const where = secondChain !== null ? `${startChain} and ${secondChain}` : chain;
   return [
     {
       text: `Use a fresh ${walletFor(chain)} that holds only the funds you plan to farm, and keep its seed phrase offline.`,
