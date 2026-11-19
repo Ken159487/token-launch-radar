@@ -79,6 +79,29 @@ button { cursor: pointer; }
 .tabs button[aria-pressed="true"] { background: var(--accent); color: #0c1210; font-weight: 600; }
 .count { margin-left: auto; color: var(--muted); font-size: 13px; align-self: center; }
 
+/* The fitted model on first paint: one row of four facts and a one-line note, in the same
+   surface, border and type steps as the rest of the page. */
+.model-strip {
+  display: grid; grid-template-columns: 1.35fr 1fr 1.15fr 1fr; gap: var(--step-2) var(--step-5);
+  padding: var(--step-3) var(--step-4); margin-bottom: var(--step-4);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel);
+}
+.ms-fact { display: grid; gap: 2px; min-width: 0; }
+.ms-fact span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.ms-fact b { font-family: var(--font-num); font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ms-note { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+
+/* Comparables: one compact panel per category, headed by the multiple the category's live
+   names support. Rows are tighter than the board's, so a category reads at a glance. */
+.comp-list { display: grid; gap: var(--step-3); }
+.comp-intro { max-width: 78ch; }
+.comp { padding: var(--step-3) var(--step-4) var(--step-2); }
+.comp-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--step-2) var(--step-4); padding-bottom: var(--step-2); }
+.comp-head h3 { margin-right: auto; }
+.comp-head span { color: var(--muted); font-size: 13px; }
+.comp-table th, .comp-table td { padding: 6px var(--step-2); }
+.comp-table td.num, .comp-table th.num { text-align: right; }
+
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); overflow: hidden; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -127,9 +150,9 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 10
 .empty p { color: var(--muted); }
 
 .detail {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(720px, 94vw); height: 100%; z-index: 10;
-  background: var(--surface); border: 0; border-left: 1px solid var(--border); padding: var(--step-4) var(--step-5);
-  overflow-y: auto; margin: 0 0 0 auto; max-height: 100%; font-size: 14px;
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(880px, 94vw); height: 100%; z-index: 10;
+  background: var(--surface); border: 0; border-left: 1px solid var(--border); padding: var(--step-3) var(--step-5) var(--step-4);
+  overflow-y: auto; margin: 0 0 0 auto; max-height: 100%; font-size: 13px;
 }
 .detail::backdrop { background: rgba(4, 8, 6, 0.6); }
 .detail-head { display: flex; align-items: start; justify-content: space-between; gap: var(--step-4); }
@@ -138,16 +161,16 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 10
 .close { flex: none; min-width: 32px; min-height: 32px; padding: 0 var(--step-2); white-space: nowrap; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
 .detail h2 { margin-top: var(--step-1); }
 .detail .sub { margin-top: var(--step-1); }
-.detail-section { margin-top: var(--step-4); padding-top: var(--step-3); border-top: 1px solid var(--border); }
+.detail-section { margin-top: var(--step-3); padding-top: var(--step-2); border-top: 1px solid var(--border); }
 .detail-section h3 { margin-bottom: var(--step-2); }
-.equation { display: grid; gap: 6px; font-family: var(--font-num); font-size: 13px; }
+.equation { display: grid; gap: 5px; font-family: var(--font-num); font-size: 12px; }
 .equation div { display: flex; justify-content: space-between; gap: var(--step-3); }
 .equation span { color: var(--muted); }
 .equation .total { border-top: 1px solid var(--border); padding-top: var(--step-2); }
 .equation .total b { color: var(--accent); }
 /* The farm plan runs in two columns, so all six steps fit the panel at desktop height
    instead of running past the fold: the list reads 1-2, 3-4, 5-6 down the rows. */
-.steps { margin: 0; padding-left: var(--step-5); display: grid; grid-template-columns: 1fr 1fr; gap: var(--step-3) var(--step-4); }
+.steps { margin: 0; padding-left: var(--step-5); display: grid; grid-template-columns: 1fr 1fr; gap: var(--step-2) var(--step-4); font-size: 12px; line-height: 1.5; }
 .steps li { padding-left: var(--step-1); }
 .steps b { display: block; font-weight: 500; }
 .cost { color: var(--muted); font-size: 12px; font-family: var(--font-num); }

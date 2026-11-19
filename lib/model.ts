@@ -256,6 +256,20 @@ export interface LiveRow {
   mcap_to_tvl: number | null;
 }
 
+/**
+ * One live protocol the log-log fit rests on (mcap > 0, TVL > 0, not a CEX): the evidence
+ * behind a category's fitted multiple, for the dashboard's Comparables view. Ordered by the
+ * category's fitted multiple, descending, then by market cap, descending, inside the category.
+ */
+export interface Comparable {
+  slug: string;
+  name: string;
+  category: string | null;
+  tvl_usd: number;
+  mcap_usd: number;
+  ratio: number;
+}
+
 /** Everything the dashboard needs: the board, the live set, and the model it runs. */
 export interface RadarData {
   as_of: string;
@@ -269,6 +283,8 @@ export interface RadarData {
   live_size: number;
   rows: RadarRow[];
   live: LiveRow[];
+  /** Every live protocol the fit rests on, for the Comparables view. */
+  comparables: Comparable[];
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -1004,6 +1020,27 @@ export function buildRadar(
   const live = liveRows(snapshot);
   const watchlist = new Set(snapshot.watchlist);
   const early = board.filter((r) => !watchlist.has(r.slug)).length;
+  // The comparables: every live protocol the fit rests on, categories ordered by their fitted
+  // multiple (a category with too few live names falls back to the global multiple), then by
+  // market cap inside the category, so the dashboard can group them in that order.
+  const multOf = (cat: string | null): number =>
+    model.multiples[cat ?? 'Other'] ?? model.global_multiple;
+  const comparables: Comparable[] = liveForFit(snapshot.protocols)
+    .map((p) => ({
+      slug: p.slug,
+      name: p.name,
+      category: p.category,
+      tvl_usd: p.tvl_usd,
+      mcap_usd: p.mcap_usd!,
+      ratio: round4(p.mcap_usd! / p.tvl_usd),
+    }))
+    .sort((a, b) => {
+      const dm = multOf(b.category) - multOf(a.category);
+      if (dm !== 0) return dm;
+      const dc = (a.category ?? 'Other') < (b.category ?? 'Other') ? -1 : (a.category ?? 'Other') > (b.category ?? 'Other') ? 1 : 0;
+      if (dc !== 0) return dc;
+      return b.mcap_usd - a.mcap_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0);
+    });
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -1016,6 +1053,7 @@ export function buildRadar(
     live_size: live.length,
     rows: board.map((r) => radarRow(r, watchlist)),
     live,
+    comparables,
   };
   return { board, radar };
 }

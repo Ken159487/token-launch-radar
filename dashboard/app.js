@@ -1,8 +1,8 @@
 // Token Radar's dashboard, model radar-3. It reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, a filterable table, a per-protocol detail view with the
-// model's own inputs and the protocol's farm plan, the live-token set, and the model itself
-// including the fitted log-log curve and the per-category shifts the snapshot derived. No network:
-// every byte it shows is in data.js. The page recomputes each row from the snapshot figures and
+// model's own inputs and the protocol's farm plan, the live-token set, the comparables behind
+// each category's fitted multiple, and the model itself including the fitted log-log curve and
+// the per-category shifts the snapshot derived. No network: every byte it shows is in data.js. The page recomputes each row from the snapshot figures and
 // checks the number board.json carries, so the page's code and the board's data are visibly the
 // same arithmetic.
 //
@@ -207,7 +207,7 @@
     if (params.get('category')) state.category = params.get('category');
     if (params.get('chain')) state.chain = params.get('chain');
     if (params.get('w') === '1') state.watchlist = true;
-    if (params.get('tab') === 'live') state.tab = 'live';
+    if (params.get('tab') === 'live' || params.get('tab') === 'comparables') state.tab = params.get('tab');
     if (params.get('p')) state.selected = params.get('p');
     var pg = parseInt(params.get('page') || '', 10);
     if (isFinite(pg) && pg >= 1) state.page = pg;
@@ -218,7 +218,7 @@
     if (state.category !== 'all') params.set('category', state.category);
     if (state.chain !== 'all') params.set('chain', state.chain);
     if (state.watchlist) params.set('w', '1');
-    if (state.tab === 'live') params.set('tab', 'live');
+    if (state.tab !== 'pre-token') params.set('tab', state.tab);
     if (state.page > 1) params.set('page', String(state.page));
     if (state.selected) params.set('p', state.selected);
     var next = params.toString();
@@ -280,6 +280,25 @@
     );
   }
 
+  // The fitted model on first paint: every figure is derived here from DATA.model at render
+  // time (the regression, the leave-one-out validation), never typed in by hand.
+  function modelStrip() {
+    var m = DATA.model;
+    var r = m.regression;
+    var v = m.validation;
+    function pct(x) { return (x * 100).toFixed(1) + '%'; }
+    function fact(label, value) {
+      return el('div', { class: 'ms-fact' }, el('span', { text: label }), el('b', { text: value }));
+    }
+    return el('section', { class: 'model-strip', 'aria-label': 'The fitted model at a glance' },
+      fact('Fitted model', 'log(mcap) = ' + r.intercept.toFixed(3) + ' + ' + r.slope.toFixed(3) + ' x log(TVL)'),
+      fact('Fit (live protocols)', 'R\u00b2 = ' + r.r_squared.toFixed(2) + ' · n = ' + r.n),
+      fact('Leave-one-out median error', pct(v.median_ape) + ' (radar-2: ' + pct(v.radar2_median_ape) + ')'),
+      fact('Predictions within 2x', pct(v.within_2x) + ' (was ' + pct(v.radar2_within_2x) + ')'),
+      el('p', { class: 'ms-note', text: 'Fitted from this snapshot\u2019s own live protocols — exchanges excluded, so the curve moves with the snapshot. TVL alone explains little of market cap, so implied values stay estimates, never prices.' })
+    );
+  }
+
   function controls() {
     var categories = Array.from(new Set(DATA.rows.map(function (r) { return r.category || 'Other'; }))).sort();
     var chains = Array.from(new Set(DATA.rows.flatMap(function (r) { return r.chains || []; }))).sort();
@@ -299,13 +318,14 @@
     watch.addEventListener('change', function () { state.watchlist = watch.checked; state.page = 1; writeHash(); render(); });
     var pre = el('button', { type: 'button', 'aria-pressed': state.tab === 'pre-token' ? 'true' : 'false', text: 'Pre-token', onclick: function () { state.tab = 'pre-token'; state.page = 1; render(); } });
     var live = el('button', { type: 'button', 'aria-pressed': state.tab === 'live' ? 'true' : 'false', text: 'Live token', onclick: function () { state.tab = 'live'; state.page = 1; render(); } });
+    var comp = el('button', { type: 'button', 'aria-pressed': state.tab === 'comparables' ? 'true' : 'false', text: 'Comparables', onclick: function () { state.tab = 'comparables'; state.page = 1; render(); } });
     return el('div', { class: 'controls' },
       el('div', { class: 'field' }, el('label', { for: 'q', text: 'Search' }), search),
       el('div', { class: 'field' }, el('label', { for: 'category', text: 'Category' }), select),
       el('div', { class: 'field' }, el('label', { for: 'chain', text: 'Chain' }), chainSelect),
       el('label', { class: 'check', for: 'watchlist' }, watch, 'Watchlist only'),
-      el('div', { class: 'field' }, el('span', { class: 'sub', text: 'Token status' }), el('div', { class: 'tabs' }, pre, live)),
-      el('span', { class: 'count', text: state.tab === 'pre-token' ? rows().length + ' rows shown' : DATA.live.length + ' live-token protocols' })
+      el('div', { class: 'field' }, el('span', { class: 'sub', text: 'Token status' }), el('div', { class: 'tabs' }, pre, live, comp)),
+      el('span', { class: 'count', text: state.tab === 'pre-token' ? rows().length + ' rows shown' : state.tab === 'live' ? DATA.live.length + ' live-token protocols' : DATA.comparables.length + ' live protocols behind the fit' })
     );
   }
 
@@ -407,6 +427,57 @@
           tbody
         )
       )
+    );
+  }
+
+  // The comparables: the live evidence behind each category's fitted multiple. Categories
+  // arrive ordered by fitted multiple, descending, and live names by market cap, descending,
+  // inside each group (buildRadar sorts them that way); this only groups them for display.
+  function comparablesTable() {
+    var m = DATA.model;
+    function multOf(cat) {
+      var v = m.multiples[cat || 'Other'];
+      return typeof v === 'number' && isFinite(v) ? v : m.global_multiple;
+    }
+    function shiftOf(cat) { return m.category_shifts[cat || 'Other'] || 0; }
+    var order = [];
+    var byCat = {};
+    DATA.comparables.forEach(function (c) {
+      var cat = c.category || 'Other';
+      if (!byCat[cat]) { byCat[cat] = []; order.push(cat); }
+      byCat[cat].push(c);
+    });
+    var sections = order.map(function (cat) {
+      var list = byCat[cat];
+      var shift = shiftOf(cat);
+      return el('section', { class: 'panel comp' },
+        el('div', { class: 'comp-head' },
+          el('h3', { text: cat }),
+          el('span', { class: 'num', text: 'fitted multiple x' + multOf(cat).toFixed(3) }),
+          el('span', { class: 'num', text: 'shift ' + (shift >= 0 ? '+' : '') + shift.toFixed(2) }),
+          el('span', { class: 'num', text: list.length + ' live' })
+        ),
+        el('div', { class: 'table-wrap' },
+          el('table', { class: 'comp-table' },
+            el('thead', null, el('tr', null,
+              el('th', { scope: 'col', text: 'Protocol' }),
+              el('th', { scope: 'col', class: 'num', text: 'TVL' }),
+              el('th', { scope: 'col', class: 'num', text: 'Market cap' }),
+              el('th', { scope: 'col', class: 'num', text: 'Mcap / TVL' }))),
+            el('tbody', null, list.map(function (c) {
+              return el('tr', null,
+                el('td', null, el('b', { text: c.name })),
+                el('td', { class: 'num', text: fmtUsd(c.tvl_usd) }),
+                el('td', { class: 'num', text: fmtUsd(c.mcap_usd) }),
+                el('td', { class: 'num', text: 'x' + c.ratio.toFixed(2) }));
+            }))
+          )
+        )
+      );
+    });
+    return el('div', { class: 'comp-list' },
+      el('p', { class: 'sub comp-intro', text: 'The live evidence behind each category\u2019s fitted multiple: every live protocol the fit rests on (market cap above 0, TVL above 0, exchanges excluded), grouped by category in fitted-multiple order, biggest market cap first inside each group.' }),
+      sections
     );
   }
 
@@ -539,8 +610,9 @@
     var shell = el('div', { class: 'shell' });
     shell.appendChild(header());
     shell.appendChild(lede());
+    shell.appendChild(modelStrip());
     shell.appendChild(controls());
-    shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
+    shell.appendChild(state.tab === 'live' ? liveTable() : state.tab === 'comparables' ? comparablesTable() : boardTable());
     if (state.tab === 'pre-token') shell.appendChild(modelPanel());
     shell.appendChild(foot());
     app.appendChild(shell);
