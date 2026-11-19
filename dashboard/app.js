@@ -1,9 +1,10 @@
-// Token Radar's dashboard, model radar-2. It reads window.RADAR (written beside dashboard/ by
+// Token Radar's dashboard, model radar-3. It reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the ranked board, a filterable table, a per-protocol detail view with the
 // model's own inputs and the protocol's farm plan, the live-token set, and the model itself
-// including the per-category multiples the snapshot derived. No network: every byte it shows is
-// in data.js. The page recomputes each row from the snapshot figures and checks the number
-// board.json carries, so the page's code and the board's data are visibly the same arithmetic.
+// including the fitted log-log curve and the per-category shifts the snapshot derived. No network:
+// every byte it shows is in data.js. The page recomputes each row from the snapshot figures and
+// checks the number board.json carries, so the page's code and the board's data are visibly the
+// same arithmetic.
 //
 // The farm plan below is the same derivation main.ts writes to board.json: category, chains, TVL,
 // age and implied value decide the action, the capital, the hold and every cost and time. No name
@@ -45,14 +46,24 @@
     return 'x' + n.toFixed(2);
   }
   // The model in one function: the page recomputes a row from the snapshot figures and checks the
-  // number board.json carries. The multiple is the row's own: its category's derived multiple, or
-  // the global median when the category has no live protocol.
+  // number board.json carries. The multiple is the row's own: the fitted log-log curve, with its
+  // category's intercept shift, evaluated at the row's own TVL — so two protocols in one category
+  // carry different multiples when their TVLs differ. The fit is recomputed here from the
+  // regression and the shift, not read off the row's rounded multiple: the row stores its
+  // multiple to four decimals, and that rounding alone moves the implied value, so the
+  // recompute must use the same unrounded arithmetic the board was scored with.
+  function fittedMultiple(tvl, shift, model) {
+    var raw = Math.exp(model.regression.intercept + shift) * Math.pow(tvl, model.regression.slope - 1);
+    return Math.min(model.multiple_max, Math.max(model.multiple_min, raw));
+  }
   function impliedOf(row, model) {
+    var shift = model.category_shifts[row.category || 'Other'] || 0;
+    var multiple = fittedMultiple(row.tvl_usd, shift, model);
     var growth = Math.min(model.growth_cap, Math.max(model.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
     var growthMult = 1 + (growth / 100) * model.growth_weight;
     var age = row.age_days === null || row.age_days === undefined ? model.unknown_age_days : row.age_days;
     var maturity = model.maturity_floor + (Math.min(Math.max(age, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-    return Math.max(1, Math.round(row.tvl_usd * row.multiple * growthMult * maturity));
+    return Math.max(1, Math.round(row.tvl_usd * multiple * growthMult * maturity));
   }
 
   function el(tag, attrs) {
@@ -358,7 +369,7 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { class: 'sub', text: 'Token live: these protocols already trade, so their market cap is a fact, not a model. They are set aside from the pre-token ranking, and their market-cap-to-TVL ratios are what the model learns from.' }),
+          el('caption', { class: 'sub', text: 'Token live: these protocols already trade, so their market cap is a fact, not a model. They are set aside from the pre-token ranking, and their market caps are what the model fits its curve to.' }),
           el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Status' }), el('th', { scope: 'col', text: 'Protocol' }), el('th', { scope: 'col', text: 'TVL' }), el('th', { scope: 'col', text: '7d' }), el('th', { scope: 'col', text: 'Market cap' }), el('th', { scope: 'col', text: 'Mcap / TVL' }), el('th', { scope: 'col', text: 'Token' }))),
           tbody
         )
@@ -368,39 +379,70 @@
 
   function modelPanel() {
     var m = DATA.model;
+    var r = m.regression;
+    var v = m.validation;
     var entries = Object.keys(m.multiples).map(function (cat) {
-      return { category: cat, n: m.multiple_counts[cat] || 0, multiple: m.multiples[cat] };
+      return { category: cat, n: m.multiple_counts[cat] || 0, shift: m.category_shifts[cat] || 0, multiple: m.multiples[cat] };
     }).sort(function (a, b) { return b.multiple - a.multiple || (a.category < b.category ? -1 : 1); });
     var multRows = entries.map(function (e) {
       return el('tr', null,
         el('td', { text: e.category }),
         el('td', { class: 'num', text: String(e.n) }),
+        el('td', { class: 'num', text: (e.shift >= 0 ? '+' : '') + e.shift.toFixed(2) }),
         el('td', { class: 'num', text: 'x' + e.multiple.toFixed(3) })
       );
     });
     multRows.push(el('tr', null,
-      el('td', { text: 'All other categories (fewer than ' + m.min_live_n + ' live protocols)' }),
-      el('td', { class: 'num', text: '—' }),
+      el('td', { text: 'Global fit (no category shift)' }),
+      el('td', { class: 'num', text: String(m.live_count) }),
+      el('td', { class: 'num', text: '+0.00' }),
       el('td', { class: 'num', text: 'x' + m.global_multiple.toFixed(3) })
     ));
+    function pct(x) { return (x * 100).toFixed(1) + '%'; }
+    var valRows = [
+      ['Median absolute percentage error', pct(v.median_ape), pct(v.radar2_median_ape)],
+      ['Mean absolute percentage error', pct(v.mean_ape), pct(v.radar2_mean_ape)],
+      ['Predictions within 2x of the recorded market cap', pct(v.within_2x), pct(v.radar2_within_2x)],
+      ['Predictions within 1.5x of the recorded market cap', pct(v.within_1_5x), pct(v.radar2_within_1_5x)]
+    ].map(function (row) {
+      return el('tr', null,
+        el('td', { text: row[0] }),
+        el('td', { class: 'num', text: row[1] }),
+        el('td', { class: 'num', text: row[2] })
+      );
+    });
     return el('section', { class: 'panel model' },
       el('h2', { text: 'How implied value is computed' }),
       el('p', { class: 'sub', text: 'Every row is scored by one function of the snapshot figures. No protocol name is special-cased, and no row is hand-picked.' }),
       el('div', { class: 'formula' },
-        'implied = round( tvl_usd x multiple(category) x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
+        'log(mcap) = ' + r.intercept.toFixed(3) + ' + ' + r.slope.toFixed(3) + ' x log(TVL)' + '   (R\u00b2 = ' + r.r_squared.toFixed(2) + ', n = ' + r.n + ' live protocols)' + '\n' +
+        'multiple(category, TVL) = clamp( exp(' + r.intercept.toFixed(3) + ' + shift(category)) x TVL^(' + (r.slope - 1).toFixed(3) + '), ' + m.multiple_min + ', ' + m.multiple_max + ' )' + '\n' +
+        'implied = round( tvl_usd x multiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x (' + m.maturity_floor + ' + min(age_days, ' + m.maturity_days + ') / ' + m.maturity_days + ' x ' + m.maturity_range + ') )'
       ),
       el('p', { class: 'sub', text: 'TVL and seven-day growth come from the snapshot. Age is the time since the protocol was first listed, the best record of how long it has run with no token; an unlisted age uses ' + m.unknown_age_days + ' days. The early radar is every pre-token protocol below the watchlist floor, by TVL, and the live-token protocols are set aside with their market caps shown.' }),
       el('h3', { text: 'Where the multiple comes from' }),
-      el('p', { class: 'sub', text: 'The base multiple is not a guess: for each category with at least ' + m.min_live_n + ' live protocols it is the median market-cap-to-TVL ratio of that category\u2019s live names in this snapshot, winsorized at the 90th percentile of x' + m.winsor_cap.toFixed(2) + ' and shrunk toward the global median of x' + m.global_multiple.toFixed(3) + ' with k=' + m.shrink_k + ', then clamped to [' + m.multiple_min + ', ' + m.multiple_max + ']. A category with fewer than ' + m.min_live_n + ' live protocols falls back to the global median: one live protocol, however extreme its ratio, never gets to price a whole category. A lending pool and a DEX are priced like different businesses because the market prices them that way.' }),
+      el('p', { class: 'sub', text: 'The curve is fitted, not guessed: an ordinary least-squares fit of log(market cap) on log(TVL) over the snapshot\u2019s ' + m.live_count + ' live protocols (exchanges excluded, since a CEX is not comparable pricing for a protocol) gives log(mcap) = ' + r.intercept.toFixed(3) + ' + ' + r.slope.toFixed(3) + ' x log(TVL). Each category with at least ' + m.min_live_n + ' live protocols gets an intercept shift: the median residual of its live names in log space, shrunk toward 0 with k=' + m.shrink_k + '. A category with fewer than ' + m.min_live_n + ' live protocols gets shift 0 and is priced by the global fit alone. Because the slope is below 1, the multiple falls as TVL grows: a $5M pool and a $5B pool are no longer priced alike. A lending pool and a DEX are priced like different businesses because the market prices them that way.' }),
       el('table', { class: 'mult-table' },
         el('thead', null, el('tr', null,
           el('th', { scope: 'col', text: 'Category' }),
           el('th', { scope: 'col', class: 'num', text: 'Live protocols' }),
-          el('th', { scope: 'col', class: 'num', text: 'Multiple' })
+          el('th', { scope: 'col', class: 'num', text: 'Shift' }),
+          el('th', { scope: 'col', class: 'num', text: 'Reference multiple' })
         )),
         el('tbody', null, multRows)
       ),
-      el('p', { class: 'note', text: 'The table above is the model\u2019s own derivation from ' + m.live_count + ' live protocols: change the snapshot and the multiples move with it. The global median, x' + m.global_multiple.toFixed(3) + ', is the fallback and the anchor of the shrinkage.' })
+      el('p', { class: 'note', text: 'Each row\u2019s multiple is the fitted multiple at that category\u2019s median live TVL: a reference point, not the scoring rule. A row\u2019s own multiple is the same formula evaluated at the row\u2019s own TVL, so two protocols in one category carry different multiples when their TVLs differ. The global entry is the fit at the global median live TVL, with shift 0. Change the snapshot and the curve moves with it.' }),
+      el('h3', { text: 'How well it predicts' }),
+      el('p', { class: 'sub', text: 'Leave-one-out over the same ' + v.n + ' live protocols: each protocol\u2019s market cap is predicted from its TVL alone, refitting the model without it, and scored against the market cap on record. Radar-3 beats radar-2\u2019s flat category multiples on every measure, but the gain is modest: a third of predictions land within 2x of the recorded market cap, against a fifth before.' }),
+      el('table', { class: 'mult-table' },
+        el('thead', null, el('tr', null,
+          el('th', { scope: 'col', text: 'Leave-one-out validation (n = ' + v.n + ')' }),
+          el('th', { scope: 'col', class: 'num', text: 'Radar-3' }),
+          el('th', { scope: 'col', class: 'num', text: 'Radar-2' })
+        )),
+        el('tbody', null, valRows)
+      ),
+      el('p', { class: 'note', text: 'TVL alone explains little of market cap (R\u00b2 = ' + r.r_squared.toFixed(2) + '): this is a better-calibrated summary of the market, not a precise price, and implied values stay estimates, never prices. The mean error is far larger than the median \u2014 a few tiny-TVL names with outsized market caps dominate it \u2014 so the median is the honest headline.' })
     );
   }
 
@@ -426,7 +468,7 @@
       el('div', null,
         el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size + (row.watchlist ? ' · watchlist' : ' · early radar') }),
         el('h2', { id: 'detail-title', text: row.name }),
-        el('p', { class: 'sub', text: (row.category || 'Other') + ' on ' + (row.chains && row.chains.length ? row.chains.join(', ') : 'an unnamed chain') })
+        el('p', { class: 'sub', text: (row.category || 'Other') + ' on ' + (row.chains && row.chains.length ? row.chains.slice(0, 3).join(', ') + (row.chains.length > 3 ? ' and ' + (row.chains.length - 3) + ' more' : '') : 'an unnamed chain') })
       ),
       el('button', { class: 'close', type: 'button', 'aria-label': 'Close details', text: 'Close', onclick: function () { dialog.close(); } })
     ));
@@ -434,7 +476,7 @@
       el('h3', { text: 'Implied value' }),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'TVL' }), el('b', { class: 'num', text: fmtUsd(row.tvl_usd) })),
-        el('div', null, el('span', { text: 'Base multiple (' + (row.category || 'Other') + ')' }), el('b', { class: 'num', text: fmtMult(row.multiple) })),
+        el('div', null, el('span', { text: 'Fitted multiple (' + (row.category || 'Other') + ', at this TVL)' }), el('b', { class: 'num', text: fmtMult(row.multiple) })),
         el('div', null, el('span', { text: 'Seven-day growth' }), el('b', { class: 'num', text: fmtPct(row.change_7d) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),

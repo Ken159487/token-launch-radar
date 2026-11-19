@@ -127,9 +127,9 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 10
 .empty p { color: var(--muted); }
 
 .detail {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 94vw); z-index: 10;
-  background: var(--surface); border-left: 1px solid var(--border); padding: var(--step-5);
-  overflow-y: auto; margin: 0 0 0 auto; max-height: 100%;
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(720px, 94vw); height: 100%; z-index: 10;
+  background: var(--surface); border: 0; border-left: 1px solid var(--border); padding: var(--step-4) var(--step-5);
+  overflow-y: auto; margin: 0 0 0 auto; max-height: 100%; font-size: 14px;
 }
 .detail::backdrop { background: rgba(4, 8, 6, 0.6); }
 .detail-head { display: flex; align-items: start; justify-content: space-between; gap: var(--step-4); }
@@ -138,14 +138,16 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 10
 .close { flex: none; min-width: 32px; min-height: 32px; padding: 0 var(--step-2); white-space: nowrap; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
 .detail h2 { margin-top: var(--step-1); }
 .detail .sub { margin-top: var(--step-1); }
-.detail-section { margin-top: var(--step-5); padding-top: var(--step-4); border-top: 1px solid var(--border); }
+.detail-section { margin-top: var(--step-4); padding-top: var(--step-3); border-top: 1px solid var(--border); }
 .detail-section h3 { margin-bottom: var(--step-2); }
-.equation { display: grid; gap: var(--step-2); font-family: var(--font-num); font-size: 13px; }
+.equation { display: grid; gap: 6px; font-family: var(--font-num); font-size: 13px; }
 .equation div { display: flex; justify-content: space-between; gap: var(--step-3); }
 .equation span { color: var(--muted); }
 .equation .total { border-top: 1px solid var(--border); padding-top: var(--step-2); }
 .equation .total b { color: var(--accent); }
-.steps { margin: 0; padding-left: var(--step-5); display: grid; gap: var(--step-3); }
+/* The farm plan runs in two columns, so all six steps fit the panel at desktop height
+   instead of running past the fold: the list reads 1-2, 3-4, 5-6 down the rows. */
+.steps { margin: 0; padding-left: var(--step-5); display: grid; grid-template-columns: 1fr 1fr; gap: var(--step-3) var(--step-4); }
 .steps li { padding-left: var(--step-1); }
 .steps b { display: block; font-weight: 500; }
 .cost { color: var(--muted); font-size: 12px; font-family: var(--font-num); }

@@ -1,8 +1,8 @@
-// Token Radar's entrypoint (Node 22, standard library only), model radar-2.
+// Token Radar's entrypoint (Node 22, standard library only), model radar-3.
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>),
-// derives the model's base multiples from the snapshot's own live protocols, scores every
-// pre-token protocol with the model in lib/model.ts, writes the ranked board to
+// fits the model's log-log curve of market cap on TVL from the snapshot's own live protocols,
+// scores every pre-token protocol with the model in lib/model.ts, writes the ranked board to
 // /output/board.json, and copies this repository's dashboard/ and screenshots/ to /output.
 // Last, it writes /output/dossier.json, the summary the judge reads, with the vendored
 // make.fun library.
@@ -17,7 +17,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MODEL, MODEL_VERSION, boardIssue, buildRadar, dataScript, deriveMultiples, parseSnapshot } from './lib/model.ts';
+import { MODEL, MODEL_VERSION, boardIssue, buildRadar, dataScript, deriveRegression, parseSnapshot, validateModel } from './lib/model.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -45,11 +45,26 @@ const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
 
 const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
 
-// The model's base multiples come from the snapshot itself: the median market-cap-to-TVL ratio
-// of each category's live protocols, shrunk toward the global median. They are derived here,
-// before any protocol is scored, so no multiple is a number typed in by hand.
-const { multiples, multiple_counts, global_multiple, winsor_cap, live_count } = deriveMultiples(snapshot.protocols);
-const model = { ...MODEL, multiples, multiple_counts, global_multiple, winsor_cap, live_count };
+// The model's fit comes from the snapshot itself: a log-log regression of market cap on TVL
+// over the live protocols (exchanges excluded), with a per-category intercept shift for each
+// category with enough live names. Nothing here is a number typed in by hand. The validation
+// is leave-one-out over the same live set, against the radar-2 baseline, so the board's
+// numbers carry their own error bars.
+const { regression, category_shifts, shift_counts, multiples, multiple_counts, global_multiple, live_count } =
+  deriveRegression(snapshot.protocols);
+const validation = validateModel(snapshot.protocols);
+const model = {
+  ...MODEL,
+  regression,
+  category_shifts,
+  shift_counts,
+  validation,
+  multiples,
+  multiple_counts,
+  global_multiple,
+  winsor_cap: 0,
+  live_count,
+};
 
 const { board, radar } = buildRadar(snapshot, model);
 const issue = boardIssue(board, snapshot);
@@ -95,7 +110,9 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside), model ${MODEL_VERSION}\n` +
-    `token radar: global multiple ${global_multiple.toFixed(3)}; ` +
+    `token radar: log(mcap) = ${regression.intercept.toFixed(3)} + ${regression.slope.toFixed(3)} x log(TVL), R2 = ${regression.r_squared.toFixed(3)}, n = ${regression.n} live protocols (exchanges excluded)\n` +
+    `token radar: leave-one-out (n=${validation.n}): radar-3 median APE ${(validation.median_ape * 100).toFixed(1)}%, within 2x ${(validation.within_2x * 100).toFixed(1)}%; radar-2 median APE ${(validation.radar2_median_ape * 100).toFixed(1)}%, within 2x ${(validation.radar2_within_2x * 100).toFixed(1)}%\n` +
+    `token radar: fitted multiple at each category's median live TVL: ` +
     Object.entries(multiples)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 6)

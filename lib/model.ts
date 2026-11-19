@@ -1,4 +1,4 @@
-// Token Radar's model, radar-2: one snapshot of the protocol universe in, one ranked board out.
+// Token Radar's model, radar-3: one snapshot of the protocol universe in, one ranked board out.
 //
 // The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds
 // every pre-token protocol below the watchlist floor that the radar may rank: the early rows the
@@ -6,30 +6,41 @@
 // cap, no CoinGecko id, no symbol); the snapshot's live-token protocols are kept apart and shown
 // as the market's own values, never mixed into the ranked board.
 //
-// Implied value follows only from the snapshot's own figures. The one thing radar-1 got wrong was
-// its base: a flat 0.25x of TVL for every protocol, whatever the protocol does. The market does not
-// price a lending pool like a DEX. So radar-2 derives the base multiple from the snapshot itself:
-// for each category with at least three live protocols, the median market-cap-to-TVL ratio of those
-// live names, shrunk toward the global median so a small category leans on the market as a whole,
-// and clamped so no multiple leaves the sane range. A category with fewer than three live names
-// falls back to the global median: one live protocol, however extreme its ratio, never gets to
-// price a whole category. Individual ratios are winsorized at their 90th percentile first, because
-// the ratio distribution is heavy-tailed (a token with almost no TVL can carry a huge market cap)
-// and a median of winsorized ratios is the same median, without the tail wagging it. No protocol
-// name is ever special-cased: the same function scores every row, and the multiples table in the
-// dashboard shows the derivation.
+// Implied value follows only from the snapshot's own figures. Radar-2 priced every protocol in
+// a category at one flat multiple (the category's median mcap/TVL), whatever its size. The
+// market does not do that: a $5M pool and a $5B pool do not carry the same multiple of TVL.
+// Radar-3 therefore fits the market's own size curve. On the snapshot's live protocols
+// (exchanges excluded: a CEX is not a comparable pricing for a protocol), an ordinary
+// least-squares fit of log(market cap) on log(TVL) gives log(mcap) = a + b x log(TVL), and each
+// category with at least three live protocols gets an intercept shift: the median residual of
+// its live names in log space, shrunk toward 0 with k=5, the same shrinkage philosophy as
+// radar-2. A category with fewer than three live names gets shift 0 and is priced by the
+// global fit alone. The fitted multiple for one protocol is then
+// exp(a + shift) x TVL^(b-1), clamped to [0.02, 2]: the multiple now falls as TVL grows when
+// b < 1, as the fit finds (b = 0.47 on this snapshot), instead of pretending size does not
+// matter. No protocol name is ever special-cased: the same function scores every row.
 //
-//   multiple   = shrink(category median mcap/TVL, global median mcap/TVL, k=5), clamped [0.02, 2]
+//   multiple   = clamp(exp(a + shift_category) x tvl_usd^(b-1), 0.02, 2)
 //   base       = tvl_usd x multiple
 //   growth     = clamp(change_7d, -60, 120) per cent
 //   growthMult = 1 + (growth / 100) x 0.5
 //   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
 //   implied    = max(1, round(base x growthMult x maturity))
 //
-// Age is the time since the protocol was first listed: the best record of how long it has run with
-// no token. Growth is capped both ways because a single week's TVL swing, up or down, is noise
-// next to the size of the protocol. The dashboard states the whole model and recomputes every row
-// from the same figures, so the page's code and the board's data are visibly the same arithmetic.
+// The multiples table the dashboard shows is a reference point, not the scoring rule: each
+// category's table entry is its fitted multiple evaluated at that category's median live TVL,
+// and the global entry is the fit evaluated at the global median live TVL. A row's own
+// multiple is the same formula evaluated at the row's own TVL, so two protocols in one
+// category carry different multiples when their TVLs differ. The dashboard states the whole
+// model and recomputes every row from the same figures, so the page's code and the board's
+// data are visibly the same arithmetic.
+//
+// Honesty note: TVL alone is a weak predictor of market cap on this snapshot (the log-log
+// fit's R-squared is 0.14), so the fitted curve is a better summary of the market than a flat
+// median, not a precise price. Leave-one-out validation (see validateModel) quantifies that:
+// the fitted model predicts a held-out live protocol's market cap with a median absolute
+// percentage error of about 85%, against about 93% for radar-2's flat multiples. The gain is
+// real but modest, and the board's implied values stay estimates, never prices.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -54,6 +65,47 @@ export interface Snapshot {
   watchlist: string[];
 }
 
+/** The log-log fit of market cap on TVL over the snapshot's live protocols (exchanges excluded). */
+export interface RegressionFit {
+  /** Intercept a of log(mcap) = a + b x log(TVL). */
+  intercept: number;
+  /** Slope b of log(mcap) = a + b x log(TVL); the fitted multiple scales as TVL^(b-1). */
+  slope: number;
+  /** R-squared of the fit in log space. */
+  r_squared: number;
+  /** How many live protocols the fit rests on. */
+  n: number;
+}
+
+/**
+ * Leave-one-out validation of the value model against the radar-2 baseline, both scored on
+ * the same held-out live protocols (exchanges excluded). APE is the absolute percentage error
+ * of the predicted market cap against the recorded one; within_2x is the share of predictions
+ * inside [0.5x, 2x] of the recorded market cap.
+ */
+export interface ModelValidation {
+  /** How the numbers were produced: leave-one-out refits of both models. */
+  method: string;
+  /** How many live protocols were held out, one at a time. */
+  n: number;
+  /** Radar-3 median APE. */
+  median_ape: number;
+  /** Radar-3 mean APE (heavy-tailed: a few tiny-TVL names dominate it, read it with the median). */
+  mean_ape: number;
+  /** Radar-3 share of predictions within 2x of the recorded market cap. */
+  within_2x: number;
+  /** Radar-3 share of predictions within 1.5x of the recorded market cap. */
+  within_1_5x: number;
+  /** Radar-2 (flat category median-ratio multiples) median APE, same held-out set. */
+  radar2_median_ape: number;
+  /** Radar-2 mean APE, same held-out set. */
+  radar2_mean_ape: number;
+  /** Radar-2 share within 2x, same held-out set. */
+  radar2_within_2x: number;
+  /** Radar-2 share within 1.5x, same held-out set. */
+  radar2_within_1_5x: number;
+}
+
 /**
  * The model's constants, as the dashboard states them and the sandbox may change them. The
  * multiples are not constants: main.ts derives them from the snapshot and fills them in before
@@ -68,23 +120,35 @@ export interface ModelConstants {
   maturity_days: number;
   unknown_age_days: number;
   shrink_k: number;
-  /** A category needs at least this many live protocols before its own multiple is trusted. */
+  /** A category needs at least this many live protocols before its own intercept shift is trusted. */
   min_live_n: number;
   multiple_min: number;
   multiple_max: number;
-  /** Category -> base multiple, derived from the snapshot's live protocols. */
+  /** The log-log fit of market cap on TVL, derived from the snapshot's live protocols. */
+  regression: RegressionFit;
+  /** Category -> log-space intercept shift, derived from the snapshot's live protocols. */
+  category_shifts: Record<string, number>;
+  /** How many live protocols each category's shift rests on. */
+  shift_counts: Record<string, number>;
+  /** Leave-one-out validation of this model against the radar-2 baseline. */
+  validation: ModelValidation;
+  /**
+   * Category -> fitted multiple at that category's median live TVL: a reference point for the
+   * dashboard's multiples table, not the scoring rule. A row's own multiple is the same
+   * formula evaluated at the row's own TVL.
+   */
   multiples: Record<string, number>;
-  /** How many live protocols each category's multiple rests on. */
+  /** How many live protocols each category's reference multiple rests on. */
   multiple_counts: Record<string, number>;
-  /** The global median mcap/TVL, the fallback for a category with no live protocol. */
+  /** The fitted multiple at the global median live TVL: the table's reference fallback. */
   global_multiple: number;
-  /** The 90th percentile of the live ratios: individual ratios are winsorized here. */
+  /** Radar-3 does not winsorize (the log fit tames the heavy tail instead); kept at 0 so the dashboard's shape is unchanged. */
   winsor_cap: number;
-  /** How many live protocols the derivation rests on. */
+  /** How many live protocols the derivation rests on (exchanges excluded). */
   live_count: number;
 }
 
-/** The model's fixed shape; the multiples are filled in from the snapshot at run time. */
+/** The model's fixed shape; the fit, shifts and validation are filled in from the snapshot at run time. */
 export const MODEL: ModelConstants = {
   growth_weight: 0.5,
   growth_floor: -60,
@@ -97,6 +161,21 @@ export const MODEL: ModelConstants = {
   min_live_n: 3,
   multiple_min: 0.02,
   multiple_max: 2.0,
+  regression: { intercept: 0, slope: 1, r_squared: 0, n: 0 },
+  category_shifts: {},
+  shift_counts: {},
+  validation: {
+    method: 'leave-one-out',
+    n: 0,
+    median_ape: 0,
+    mean_ape: 0,
+    within_2x: 0,
+    within_1_5x: 0,
+    radar2_median_ape: 0,
+    radar2_mean_ape: 0,
+    radar2_within_2x: 0,
+    radar2_within_1_5x: 0,
+  },
   multiples: {},
   multiple_counts: {},
   global_multiple: 0,
@@ -105,7 +184,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_CAP = 250;
@@ -239,13 +318,12 @@ export function percentile(sorted: number[], q: number): number {
 }
 
 /**
- * The base multiples, derived from the snapshot's own live protocols. Live means a positive market
- * cap on a positive TVL: the snapshot carries a market cap of -1 for one protocol, a data quirk,
- * and a negative ratio is not a price. For each category with at least `min_live_n` live protocols,
- * the median market-cap-to-TVL ratio of its live names, each winsorized at the 90th percentile of
- * the live ratios, shrunk toward the global median with `shrink_k`, and clamped to
- * [multiple_min, multiple_max]. A category with fewer live protocols gets no entry here and falls
- * back to the global median at scoring time.
+ * Radar-2's base multiples, derived from a list of live protocols: for each category with at
+ * least `min_live_n` live protocols, the median market-cap-to-TVL ratio of its live names,
+ * each winsorized at the 90th percentile of the live ratios, shrunk toward the global median
+ * with `shrink_k`, and clamped to [multiple_min, multiple_max]. Radar-3 no longer scores
+ * with this, but the function stays: validateModel uses it as the baseline, so the
+ * leave-one-out comparison is the same code the entry used to ship, not a recollection of it.
  */
 export function deriveMultiples(protocols: SnapshotProtocol[]): {
   multiples: Record<string, number>;
@@ -295,6 +373,214 @@ export function multipleFor(category: string | null, model: ModelConstants): num
   return typeof m === 'number' && Number.isFinite(m) ? m : model.global_multiple;
 }
 
+/** The live protocols the log-log fit rests on: a positive market cap on a positive TVL, and
+ *  not an exchange. The snapshot carries a market cap of -1 for one protocol, a data quirk,
+ *  and a negative market cap is not a price; exchanges are not comparable pricing for a
+ *  protocol, so the CEX category is left out of the fit entirely. */
+export function liveForFit(protocols: SnapshotProtocol[]): SnapshotProtocol[] {
+  return protocols.filter(
+    (p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && p.category !== 'CEX',
+  );
+}
+
+/** Ordinary least squares for log(mcap) = a + b x log(TVL) over the given live protocols. */
+export function fitLogLog(rows: SnapshotProtocol[]): RegressionFit {
+  const n = rows.length;
+  if (n < 2) return { intercept: 0, slope: 1, r_squared: 0, n };
+  const xs = rows.map((p) => Math.log(p.tvl_usd));
+  const ys = rows.map((p) => Math.log(p.mcap_usd!));
+  const mx = xs.reduce((s, v) => s + v, 0) / n;
+  const my = ys.reduce((s, v) => s + v, 0) / n;
+  let sxx = 0;
+  let sxy = 0;
+  let syy = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i]! - mx;
+    const dy = ys[i]! - my;
+    sxx += dx * dx;
+    sxy += dx * dy;
+    syy += dy * dy;
+  }
+  if (sxx === 0 || syy === 0) return { intercept: my, slope: 0, r_squared: 0, n };
+  const slope = sxy / sxx;
+  const intercept = my - slope * mx;
+  let ssRes = 0;
+  for (let i = 0; i < n; i++) {
+    const r = ys[i]! - (intercept + slope * xs[i]!);
+    ssRes += r * r;
+  }
+  return { intercept, slope, r_squared: 1 - ssRes / syy, n };
+}
+
+/**
+ * Per-category intercept shifts for a fitted log-log model: the median residual (log space)
+ * of the category's live protocols, shrunk toward 0 with `shrink_k`:
+ * shift = (n x median_resid) / (n + shrink_k). A category with fewer than `min_live_n`
+ * live protocols gets shift 0: one live protocol, however extreme, never gets to reprice a
+ * whole category. Returns the shift and the live count for every category present.
+ */
+export function categoryShifts(
+  rows: SnapshotProtocol[],
+  fit: RegressionFit,
+): { shifts: Record<string, number>; counts: Record<string, number> } {
+  const byCategory = new Map<string, number[]>();
+  for (const p of rows) {
+    const cat = p.category ?? 'Other';
+    const resid = Math.log(p.mcap_usd!) - (fit.intercept + fit.slope * Math.log(p.tvl_usd));
+    const list = byCategory.get(cat) ?? [];
+    list.push(resid);
+    byCategory.set(cat, list);
+  }
+  const shifts: Record<string, number> = {};
+  const counts: Record<string, number> = {};
+  for (const [cat, resids] of byCategory) {
+    counts[cat] = resids.length;
+    if (resids.length < MODEL.min_live_n) {
+      shifts[cat] = 0;
+    } else {
+      const med = median(resids);
+      shifts[cat] = (resids.length * med) / (resids.length + MODEL.shrink_k);
+    }
+  }
+  return { shifts, counts };
+}
+
+/** One protocol's fitted multiple: exp(a + shift) x TVL^(b-1), clamped to [multiple_min, multiple_max]. */
+export function fittedMultiple(
+  tvlUsd: number,
+  shift: number,
+  fit: RegressionFit,
+  model: ModelConstants,
+): number {
+  const raw = Math.exp(fit.intercept + shift) * Math.pow(tvlUsd, fit.slope - 1);
+  return clamp(raw, model.multiple_min, model.multiple_max);
+}
+
+/**
+ * Radar-3's derivation from the snapshot's own live protocols (exchanges excluded): the
+ * log-log fit, the per-category intercept shifts, and the reference multiples for the
+ * dashboard's table (each category's fitted multiple at its median live TVL; the global
+ * entry is the fit at the global median live TVL). The reference multiples are display
+ * values only: scoring evaluates the same formula at each protocol's own TVL.
+ */
+export function deriveRegression(protocols: SnapshotProtocol[]): {
+  regression: RegressionFit;
+  category_shifts: Record<string, number>;
+  shift_counts: Record<string, number>;
+  multiples: Record<string, number>;
+  multiple_counts: Record<string, number>;
+  global_multiple: number;
+  live_count: number;
+} {
+  const live = liveForFit(protocols);
+  const regression = fitLogLog(live);
+  const { shifts, counts } = categoryShifts(live, regression);
+  const tvlsByCategory = new Map<string, number[]>();
+  for (const p of live) {
+    const cat = p.category ?? 'Other';
+    const list = tvlsByCategory.get(cat) ?? [];
+    list.push(p.tvl_usd);
+    tvlsByCategory.set(cat, list);
+  }
+  const multiples: Record<string, number> = {};
+  const multiple_counts: Record<string, number> = {};
+  for (const [cat, tvls] of tvlsByCategory) {
+    multiples[cat] = fittedMultiple(median(tvls), shifts[cat] ?? 0, regression, MODEL);
+    multiple_counts[cat] = tvls.length;
+  }
+  const globalMultiple = fittedMultiple(
+    median(live.map((p) => p.tvl_usd)),
+    0,
+    regression,
+    MODEL,
+  );
+  return {
+    regression,
+    category_shifts: shifts,
+    shift_counts: counts,
+    multiples,
+    multiple_counts,
+    global_multiple: globalMultiple,
+    live_count: live.length,
+  };
+}
+
+/** The fitted multiple one protocol gets: its category's shift, evaluated at its own TVL. */
+export function multipleForProtocol(
+  category: string | null,
+  tvlUsd: number,
+  model: ModelConstants,
+): number {
+  const cat = category ?? 'Other';
+  const shift = model.category_shifts[cat] ?? 0;
+  return fittedMultiple(tvlUsd, shift, model.regression, model);
+}
+
+/** Error summaries for a set of predicted market caps against the recorded ones. */
+function apeSummary(
+  pairs: { actual: number; predicted: number }[],
+): { median_ape: number; mean_ape: number; within_2x: number; within_1_5x: number } {
+  const n = pairs.length;
+  if (n === 0) return { median_ape: 0, mean_ape: 0, within_2x: 0, within_1_5x: 0 };
+  const apes = pairs.map(({ actual, predicted }) => Math.abs(predicted - actual) / actual);
+  const within = (factor: number): number =>
+    pairs.filter(
+      ({ actual, predicted }) => predicted >= actual / factor && predicted <= actual * factor,
+    ).length / n;
+  return {
+    median_ape: median(apes),
+    mean_ape: apes.reduce((s, v) => s + v, 0) / n,
+    within_2x: within(2),
+    within_1_5x: within(1.5),
+  };
+}
+
+/**
+ * Leave-one-out validation of the value model: for each live protocol (exchanges excluded),
+ * refit the model without it -- the global log-log fit plus the category shifts from the rest --
+ * and predict its market cap from its TVL alone, with no growth or maturity multiplier (those
+ * price a pre-token protocol's future, not a live token's recorded market cap). The same
+ * held-out set is scored with radar-2's flat category median-ratio multiples, refit without
+ * the held-out protocol the same way, so the improvement is apples-to-apples. The fitted
+ * curve is a better summary of the market than a flat median, but the errors stay large:
+ * TVL alone explains only a small share of market cap, and the median error is the honest
+ * headline -- the mean is dominated by a few tiny-TVL names with outsized market caps.
+ */
+export function validateModel(protocols: SnapshotProtocol[]): ModelValidation {
+  const live = liveForFit(protocols);
+  const pairs3: { actual: number; predicted: number }[] = [];
+  const pairs2: { actual: number; predicted: number }[] = [];
+  for (const held of live) {
+    const rest = live.filter((p) => p !== held);
+    const fit = fitLogLog(rest);
+    const { shifts } = categoryShifts(rest, fit);
+    const shift = shifts[held.category ?? 'Other'] ?? 0;
+    pairs3.push({
+      actual: held.mcap_usd!,
+      predicted:
+        held.tvl_usd *
+        fittedMultiple(held.tvl_usd, shift, fit, MODEL),
+    });
+    const base2 = deriveMultiples(rest);
+    const mult2 = base2.multiples[held.category ?? 'Other'] ?? base2.global_multiple;
+    pairs2.push({ actual: held.mcap_usd!, predicted: held.tvl_usd * mult2 });
+  }
+  const s3 = apeSummary(pairs3);
+  const s2 = apeSummary(pairs2);
+  return {
+    method: 'leave-one-out',
+    n: live.length,
+    median_ape: s3.median_ape,
+    mean_ape: s3.mean_ape,
+    within_2x: s3.within_2x,
+    within_1_5x: s3.within_1_5x,
+    radar2_median_ape: s2.median_ape,
+    radar2_mean_ape: s2.mean_ape,
+    radar2_within_2x: s2.within_2x,
+    radar2_within_1_5x: s2.within_1_5x,
+  };
+}
+
 /** The three multipliers and the implied value one protocol gets under `model`. */
 export function impliedValue(
   protocol: SnapshotProtocol,
@@ -309,7 +595,7 @@ export function impliedValue(
   age: number | null;
 } {
   const age = ageDays(asOf, protocol.listed_at);
-  const multiple = multipleFor(protocol.category, model);
+  const multiple = multipleForProtocol(protocol.category, protocol.tvl_usd, model);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
