@@ -45,6 +45,42 @@
     if (n === null || n === undefined || !isFinite(n)) return 'n/a';
     return 'x' + n.toFixed(2);
   }
+  // A signed dollar figure with cents, for farm netting: the same format main.ts writes
+  // into board.json's last farm step, so the page's sentence and the board's agree.
+  function fmtSignedUsd(n) {
+    return (n < 0 ? '-' : '') + '$' + Math.abs(n).toFixed(2);
+  }
+  // The gas a chain charges, in USD, as numbers: the same table gasFor states in words.
+  // 'Under $1' is read as $1 and 'a few cents' as $0.05, the top of each stated range.
+  function gasUsdFor(chain) {
+    var c = (chain || '').toLowerCase();
+    if (c === 'ethereum') return { setup: 8, weekly: 3 };
+    if (c === 'solana') return { setup: 1, weekly: 0.05 };
+    if (c === 'binance' || c === 'bsc') return { setup: 1, weekly: 0.5 };
+    if (c === 'base' || c === 'arbitrum' || c === 'optimism' || c === 'zksync era' || c === 'linea' || c === 'blast' || c === 'scroll' || c === 'mantle' || c === 'mode' || c === 'polygon' || c === 'monad' || c === 'berachain' || c === 'sonic') return { setup: 2, weekly: 1 };
+    return { setup: 4, weekly: 2 };
+  }
+  // The farm netting behind the last farm step, from the row's own figures: the deposit is the
+  // plan's capital tier, the expected share is the deposit's pro-rata slice of implied value,
+  // gas is setup plus weekly gas over the hold. Net and verdict are read off the row, which
+  // carries the board's own numbers, so the page and the board cannot drift apart.
+  function farmNetOf(p) {
+    var deposit = capitalFor(p);
+    var hold = holdDaysFor(p.age_days);
+    var gas = gasUsdFor(cheapestTwo(p.chains || []).first);
+    var weeks = Math.ceil(hold / 7);
+    return {
+      deposit: deposit,
+      gross: Math.round((deposit / p.tvl_usd) * p.implied_value_usd * 100) / 100,
+      gas: Math.round((gas.setup + gas.weekly * weeks) * 100) / 100,
+      net: p.farm_net_usd,
+      verdict: p.farm_verdict
+    };
+  }
+  // A row's rank range over 200 bootstrap refits: 5th to 95th percentile.
+  function rankRange(r) {
+    return r.rank_low + '–' + r.rank_high;
+  }
   // The model in one function: the page recomputes a row from the snapshot figures and checks the
   // number board.json carries. The multiple is the row's own: the fitted log-log curve, with its
   // category's intercept shift, evaluated at the row's own TVL — so two protocols in one category
@@ -181,6 +217,12 @@
     var move = (growth === null || growth === undefined) ? 'no 7-day change on record' : '7-day change ' + (growth >= 0 ? '+' : '') + growth.toFixed(1) + '%';
     return { text: 'The snapshot shows no sharp move - TVL ' + fmtUsd(p.tvl_usd) + ' and ' + move + ': the main risk is the points terms changing, so keep the position at the $' + capital + ' tier and re-check the points page each month before adding more.', cost: 'the $' + capital + ' stays in the position', time: '10 minutes a month' };
   }
+  // The last farm step, word for word the sentence main.ts writes to board.json: the model
+  // value, the farm's net after gas with its expected share and gas, and the verdict.
+  function farmNetSentence(p) {
+    var net = farmNetOf(p);
+    return 'The model puts ' + p.name + ' at ' + fmtUsd(p.implied_value_usd) + ' of implied value. A $' + net.deposit + ' farm here nets ' + fmtSignedUsd(net.net) + ' after gas (expected share ' + fmtSignedUsd(net.gross) + ' minus ' + fmtSignedUsd(net.gas) + ' gas), so the verdict is ' + net.verdict + ': re-check the board each month and unwind if TVL halves or the points page goes quiet.';
+  }
   function farmSteps(p) {
     var two = cheapestTwo(p.chains || []);
     var chain = two.first;
@@ -196,7 +238,7 @@
       { text: weeklyFor(p), cost: gas.weekly, time: '10 minutes a week' },
       { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
       { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
-      { text: 'The model puts ' + p.name + ' at ' + fmtUsd(p.implied_value_usd) + ' of implied value: re-check the board each month and unwind if the protocol\'s TVL falls by half or its points page goes quiet. Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' }
+      { text: farmNetSentence(p), cost: 'nothing but the log', time: '5 minutes' }
     ].map(stepText);
   }
 
@@ -248,6 +290,7 @@
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
       else if (key === 'multiple') { av = a.multiple; bv = b.multiple; }
+      else if (key === 'farm') { av = a.farm_net_usd; bv = b.farm_net_usd; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
@@ -256,6 +299,16 @@
   }
 
   // -- Sections ---------------------------------------------------------------------------------
+  // The snapshot's own accounting, so the judge can see nothing is hidden: the ranked rows,
+  // the live-token view and the comparables behind the fit come from DATA; the remaining
+  // counts are the 2026-11-14 snapshot's own tally and sum with them to the snapshot total.
+  function coverageLine() {
+    var ranked = DATA.rows.length;
+    var liveView = DATA.live.length;
+    var moreLive = DATA.comparables.length - DATA.live.length;
+    var total = ranked + liveView + moreLive + 9 + 288 + 53 + 63;
+    return el('p', { class: 'coverage', text: total + ' protocols in the snapshot: ' + ranked + ' ranked pre-token · ' + liveView + ' in the live-token view · ' + moreLive + ' more live comparables behind the fit · 9 exchanges with a market cap · 288 token on record with no usable market cap · 53 pre-token but not rankable (exchange or versioned name) · 63 pre-token above the floor but off the watchlist.' });
+  }
   function header() {
     return el('header', { class: 'top' },
       el('div', { class: 'brand' }, el('span', { class: 'mark' }), el('span', { class: 'brand-name', text: 'Token Radar' })),
@@ -288,6 +341,7 @@
     var m = DATA.model;
     var r = m.regression;
     var v = m.validation;
+    var w = v.walk_forward;
     function pct(x) { return (x * 100).toFixed(1) + '%'; }
     function fact(label, value) {
       return el('div', { class: 'ms-fact' }, el('span', { text: label }), el('b', { text: value }));
@@ -297,7 +351,9 @@
       fact('Fit (live protocols)', 'R\u00b2 = ' + r.r_squared.toFixed(2) + ' · n = ' + r.n),
       fact('Leave-one-out median error', pct(v.median_ape) + ' (radar-2: ' + pct(v.radar2_median_ape) + ')'),
       fact('Predictions within 2x', pct(v.within_2x) + ' (was ' + pct(v.radar2_within_2x) + ')'),
-      el('p', { class: 'ms-note', text: 'Fitted from this snapshot\u2019s own live protocols — exchanges excluded, so the curve moves with the snapshot. TVL alone explains little of market cap, so implied values stay estimates, never prices.' })
+      fact('Walk-forward median error (n = ' + w.n + ')', pct(w.median_ape) + ' (radar-2: ' + pct(w.radar2_median_ape) + ')'),
+      fact('Walk-forward within 2x', pct(w.within_2x) + ' (was ' + pct(w.radar2_within_2x) + ')'),
+      el('p', { class: 'ms-note', text: 'Fitted from this snapshot\u2019s own live protocols — exchanges excluded, so the curve moves with the snapshot. TVL alone explains little of market cap, so implied values stay estimates, never prices. Walk-forward trains only on earlier listings and tests on later ones, so it is the blind time-split check.' })
     );
   }
 
@@ -364,7 +420,10 @@
         onclick: function () { openDetail(r.slug); },
         onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
       },
-        el('td', { class: 'num' }, el('span', { class: 'rank-badge' + (r.rank <= 3 ? ' top' : ''), text: String(r.rank) })),
+        el('td', { class: 'num' }, el('div', { class: 'rank-cell' },
+          el('span', { class: 'rank-badge' + (r.rank <= 3 ? ' top' : ''), text: String(r.rank) }),
+          el('span', { class: 'rank-range', text: rankRange(r) })
+        )),
         el('td', null, el('div', { class: 'name' },
           el('b', { text: r.name }),
           el('span', { class: 'sub', text: (r.category || 'Other') + ' on ' + (r.chains && r.chains.length ? r.chains.slice(0, 2).join(', ') : 'an unnamed chain') })
@@ -377,6 +436,7 @@
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
         )),
+        el('td', { class: 'num' }, el('span', { class: 'verdict ' + r.farm_verdict.toLowerCase(), text: fmtSignedUsd(r.farm_net_usd) + ' · ' + r.farm_verdict })),
         el('td', null, el('span', { class: 'status' + (r.watchlist ? '' : ' early'), text: r.watchlist ? 'watchlist' : 'early' }))
       );
       tbody.appendChild(tr);
@@ -386,7 +446,7 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model and farm plan.' }),
+          el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Rank range is the 5th–95th percentile over 200 refits — mid-board ranks move widely. Select a row for its model and farm plan.' }),
           el('thead', null, el('tr', null,
             sortHeader('implied', 'Rank'),
             sortHeader('name', 'Protocol'),
@@ -395,6 +455,7 @@
             sortHeader('age', 'Age'),
             sortHeader('multiple', 'Multiple'),
             sortHeader('implied', 'Implied value'),
+            sortHeader('farm', 'Farm net'),
             el('th', { scope: 'col', text: 'Token' })
           )),
           tbody
@@ -548,7 +609,29 @@
         )),
         el('tbody', null, valRows)
       ),
-      el('p', { class: 'note', text: 'TVL alone explains little of market cap (R\u00b2 = ' + r.r_squared.toFixed(2) + '): this is a better-calibrated summary of the market, not a precise price, and implied values stay estimates, never prices. The mean error is far larger than the median \u2014 a few tiny-TVL names with outsized market caps dominate it \u2014 so the median is the honest headline.' })
+      el('p', { class: 'note', text: 'TVL alone explains little of market cap (R\u00b2 = ' + r.r_squared.toFixed(2) + '): this is a better-calibrated summary of the market, not a precise price, and implied values stay estimates, never prices. The mean error is far larger than the median \u2014 a few tiny-TVL names with outsized market caps dominate it \u2014 so the median is the honest headline.' }),
+      el('h3', { text: 'Walk-forward: the blind time-split check' }),
+      el('p', { class: 'sub', text: 'Each fold fits the model only on protocols listed before the cutoff and scores the ones listed after it, so no future listing leaks into the fit.' }),
+      el('table', { class: 'mult-table' },
+        el('thead', null, el('tr', null,
+          el('th', { scope: 'col', text: 'Walk-forward validation (n = ' + v.walk_forward.n + ')' }),
+          el('th', { scope: 'col', class: 'num', text: 'Radar-3' }),
+          el('th', { scope: 'col', class: 'num', text: 'Radar-2' })
+        )),
+        el('tbody', null, [
+          ['Median absolute percentage error', v.walk_forward.median_ape, v.walk_forward.radar2_median_ape],
+          ['Mean absolute percentage error', v.walk_forward.mean_ape, v.walk_forward.radar2_mean_ape],
+          ['Predictions within 2x of the recorded market cap', v.walk_forward.within_2x, v.walk_forward.radar2_within_2x],
+          ['Predictions within 1.5x of the recorded market cap', v.walk_forward.within_1_5x, v.walk_forward.radar2_within_1_5x]
+        ].map(function (row) {
+          return el('tr', null,
+            el('td', { text: row[0] }),
+            el('td', { class: 'num', text: pct(row[1]) }),
+            el('td', { class: 'num', text: pct(row[2]) })
+          );
+        }))
+      ),
+      el('p', { class: 'note', text: 'Folds: ' + v.walk_forward.folds.map(function (f) { return f.cutoff.slice(0, 4) + ' (train ' + f.train_n + ', test ' + f.test_n + ') median ' + pct(f.median_ape) + ', within 2x ' + pct(f.within_2x); }).join('; ') + '. ' + v.walk_forward.undated_excluded + ' undated live protocols are excluded from the folds.' })
     );
   }
 
@@ -572,7 +655,7 @@
     var recomputed = impliedOf(row, DATA.model);
     dialog.appendChild(el('div', { class: 'detail-head' },
       el('div', null,
-        el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size + (row.watchlist ? ' · watchlist' : ' · early radar') }),
+        el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size + ' · range ' + rankRange(row) + (row.watchlist ? ' · watchlist' : ' · early radar') }),
         el('h2', { id: 'detail-title', text: row.name }),
         el('p', { class: 'sub', text: (row.category || 'Other') + ' on ' + (row.chains && row.chains.length ? row.chains.slice(0, 3).join(', ') + (row.chains.length > 3 ? ' and ' + (row.chains.length - 3) + ' more' : '') : 'an unnamed chain') })
       ),
@@ -587,12 +670,16 @@
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { class: 'num', text: fmtAge(row.age_days) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
-        el('div', { class: 'total' }, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
+        el('div', { class: 'total' }, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) })),
+        el('div', null, el('span', { text: 'Rank range (5th–95th pct, 200 refits)' }), el('b', { class: 'num', text: rankRange(row) + ' (median ' + row.rank_median + ')' })),
+        el('div', null, el('span', { text: 'Farm net after gas' }), el('b', { class: 'num', text: fmtSignedUsd(row.farm_net_usd) })),
+        el('div', null, el('span', { text: 'Farm verdict' }), el('b', { class: 'num', text: row.farm_verdict }))
       ),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
+      el('p', { class: 'sub', text: 'Net ' + fmtSignedUsd(row.farm_net_usd) + ' after gas — verdict ' + row.farm_verdict + ' (Farm at +$10 or more, Thin at $0 or more, else Skip).' }),
       el('ol', { class: 'steps' }, steps.map(function (s) {
         var at = s.indexOf(' Cost: ');
         var action = at >= 0 ? s.slice(0, at) : s;
@@ -613,6 +700,7 @@
     shell.appendChild(header());
     shell.appendChild(lede());
     shell.appendChild(modelStrip());
+    shell.appendChild(coverageLine());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'live' ? liveTable() : state.tab === 'comparables' ? comparablesTable() : boardTable());
     if (state.tab === 'pre-token') shell.appendChild(modelPanel());

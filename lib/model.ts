@@ -40,7 +40,15 @@
 // median, not a precise price. Leave-one-out validation (see validateModel) quantifies that:
 // the fitted model predicts a held-out live protocol's market cap with a median absolute
 // percentage error of about 85%, against about 93% for radar-2's flat multiples. The gain is
-// real but modest, and the board's implied values stay estimates, never prices.
+// real but modest, and the board's implied values stay estimates, never prices. Two more
+// checks ride on the same fit. Walk-forward validation (see validateWalkForward) fits only
+// on protocols listed before each annual cutoff and tests on the next year's listings, so no
+// test protocol's own market cap ever enters its training fit: the error it reports is
+// out-of-sample, not in-sample. Bootstrap rank ranges (see bootstrapRankRanges) refit on
+// 200 resamples of the live comparables and re-rank the board under each, so every row
+// carries the 5th-95th percentile range its rank moves across when the fit's sample moves.
+// The point ranks and implied values never change: the ranges are evidence about the
+// ranking's stability, not a second ranking.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -78,6 +86,71 @@ export interface RegressionFit {
 }
 
 /**
+ * One fold of the walk-forward test: the model fitted on listings before `cutoff`, scored
+ * on the listings that followed before the next cutoff (or the snapshot date, for the last
+ * fold). The radar-2 figures are the same fold scored with radar-2's flat multiples, refit
+ * on the same training set, so the comparison is apples-to-apples.
+ */
+export interface WalkForwardFold {
+  /** The cutoff date (YYYY-MM-DD): training listings are strictly before it. */
+  cutoff: string;
+  /** Live protocols listed before the cutoff, which the fold's fit rests on. */
+  train_n: number;
+  /** Live protocols listed in the fold's test window. */
+  test_n: number;
+  /** Radar-3 median APE on the fold's test window (out-of-sample). */
+  median_ape: number;
+  /** Radar-3 mean APE on the fold's test window. */
+  mean_ape: number;
+  /** Radar-3 share of the fold's test window within 2x of the recorded market cap. */
+  within_2x: number;
+  /** Radar-3 share of the fold's test window within 1.5x. */
+  within_1_5x: number;
+  /** Radar-2 median APE on the same test window, same training set. */
+  radar2_median_ape: number;
+  /** Radar-2 share within 2x on the same test window, same training set. */
+  radar2_within_2x: number;
+}
+
+/**
+ * Walk-forward validation of the value model: an expanding-window, time-based
+ * out-of-sample test. Annual folds fit the same log-log model (global fit plus category
+ * shifts) on live protocols listed before a cutoff and predict the market caps of the
+ * protocols listed after it, so the model is always tested on listings it could not have
+ * seen. The pooled figures score every out-of-sample prediction together; the folds list
+ * each window on its own. Protocols with no listing date cannot be placed in time and are
+ * excluded, counted in undated_excluded.
+ */
+export interface WalkForwardValidation {
+  /** How the numbers were produced: expanding-window annual folds on listing date. */
+  method: string;
+  /** The fold cutoffs (YYYY-MM-DD), in order. */
+  cutoffs: string[];
+  /** How many live protocols were tested out-of-sample across all folds. */
+  n: number;
+  /** Live protocols left out because the snapshot records no listing date for them. */
+  undated_excluded: number;
+  /** Radar-3 median APE, pooled over all out-of-sample predictions. */
+  median_ape: number;
+  /** Radar-3 mean APE, pooled. */
+  mean_ape: number;
+  /** Radar-3 share of out-of-sample predictions within 2x of the recorded market cap. */
+  within_2x: number;
+  /** Radar-3 share within 1.5x, pooled. */
+  within_1_5x: number;
+  /** Radar-2 (flat category median-ratio multiples) median APE, same pooled set. */
+  radar2_median_ape: number;
+  /** Radar-2 mean APE, same pooled set. */
+  radar2_mean_ape: number;
+  /** Radar-2 share within 2x, same pooled set. */
+  radar2_within_2x: number;
+  /** Radar-2 share within 1.5x, same pooled set. */
+  radar2_within_1_5x: number;
+  /** The folds, in cutoff order. */
+  folds: WalkForwardFold[];
+}
+
+/**
  * Leave-one-out validation of the value model against the radar-2 baseline, both scored on
  * the same held-out live protocols (exchanges excluded). APE is the absolute percentage error
  * of the predicted market cap against the recorded one; within_2x is the share of predictions
@@ -104,6 +177,8 @@ export interface ModelValidation {
   radar2_within_2x: number;
   /** Radar-2 share within 1.5x, same held-out set. */
   radar2_within_1_5x: number;
+  /** Walk-forward (time-based out-of-sample) validation of the same model. */
+  walk_forward: WalkForwardValidation;
 }
 
 /**
@@ -175,6 +250,21 @@ export const MODEL: ModelConstants = {
     radar2_mean_ape: 0,
     radar2_within_2x: 0,
     radar2_within_1_5x: 0,
+    walk_forward: {
+      method: 'walk-forward (expanding window, annual folds)',
+      cutoffs: [],
+      n: 0,
+      undated_excluded: 0,
+      median_ape: 0,
+      mean_ape: 0,
+      within_2x: 0,
+      within_1_5x: 0,
+      radar2_median_ape: 0,
+      radar2_mean_ape: 0,
+      radar2_within_2x: 0,
+      radar2_within_1_5x: 0,
+      folds: [],
+    },
   },
   multiples: {},
   multiple_counts: {},
@@ -202,6 +292,12 @@ export interface FarmStep {
 /** One row of board.json: the ranked board's row. */
 export interface BoardRow {
   rank: number;
+  /** 5th percentile bootstrap rank: the rank range's lower end (rank_low <= rank). */
+  rank_low: number;
+  /** Median bootstrap rank across the refits. */
+  rank_median: number;
+  /** 95th percentile bootstrap rank: the range's upper end (rank <= rank_high). */
+  rank_high: number;
   slug: string;
   name: string;
   category: string | null;
@@ -215,6 +311,10 @@ export interface BoardRow {
   token_status: 'pre-token';
   age_days: number | null;
   implied_value_usd: number;
+  /** Net expected value of farming this row, in USD, rounded to cents (may be negative). */
+  farm_net_usd: number;
+  /** Farm, Thin or Skip, from farm_net_usd: Farm at $10 or more, Thin at $0 or more, else Skip. */
+  farm_verdict: 'Farm' | 'Thin' | 'Skip';
   model: {
     multiple: number;
     growth_pct: number;
@@ -228,6 +328,12 @@ export interface BoardRow {
 /** The dashboard's compact view of one row, with farm plans generated in the page. */
 export interface RadarRow {
   rank: number;
+  /** 5th percentile bootstrap rank: the rank range's lower end (rank_low <= rank). */
+  rank_low: number;
+  /** Median bootstrap rank across the refits. */
+  rank_median: number;
+  /** 95th percentile bootstrap rank: the range's upper end (rank <= rank_high). */
+  rank_high: number;
   slug: string;
   name: string;
   category: string | null;
@@ -238,6 +344,10 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  /** Net expected value of farming this row, in USD, rounded to cents (may be negative). */
+  farm_net_usd: number;
+  /** Farm, Thin or Skip, from farm_net_usd: Farm at $10 or more, Thin at $0 or more, else Skip. */
+  farm_verdict: 'Farm' | 'Thin' | 'Skip';
   multiple: number;
   growth_multiplier: number;
   maturity_multiplier: number;
@@ -594,7 +704,165 @@ export function validateModel(protocols: SnapshotProtocol[]): ModelValidation {
     radar2_mean_ape: s2.mean_ape,
     radar2_within_2x: s2.within_2x,
     radar2_within_1_5x: s2.within_1_5x,
+    walk_forward: validateWalkForward(protocols),
   };
+}
+
+/**
+ * Walk-forward validation of the value model: an expanding-window, time-based
+ * out-of-sample test on listing date. The folds cut at the 1st of January of 2023, 2024
+ * and 2025: the earliest training set, the listings of 2021-2022, is still large enough
+ * to fit a two-parameter curve, and every dated protocol listed from 2023 onward is tested
+ * exactly once, in the fold right after its listing year. Each fold refits the same log-log
+ * model (global fit plus category shifts) on its training set only, then predicts the test
+ * window's market caps from TVL alone, with no growth or maturity multiplier (those price
+ * a pre-token protocol's future, not a live token's recorded market cap). The same windows
+ * are scored with radar-2's flat multiples, refit on the same training sets. The pooled
+ * figures are the honest out-of-sample headline; the folds show whether the error is stable
+ * across years or drifting. Protocols with no listing date cannot be placed in time and are
+ * excluded from every fold; their count is reported in undated_excluded.
+ */
+export function validateWalkForward(protocols: SnapshotProtocol[]): WalkForwardValidation {
+  const live = liveForFit(protocols);
+  const dated = live.filter((p) => p.listed_at !== null);
+  const cutoffs = ['2023-01-01', '2024-01-01', '2025-01-01'];
+  const pooled3: { actual: number; predicted: number }[] = [];
+  const pooled2: { actual: number; predicted: number }[] = [];
+  const folds: WalkForwardFold[] = [];
+  for (let i = 0; i < cutoffs.length; i++) {
+    const cutoff = cutoffs[i]!;
+    const next = cutoffs[i + 1] ?? null;
+    const train = dated.filter((p) => p.listed_at! < cutoff);
+    const test = dated.filter(
+      (p) => p.listed_at! >= cutoff && (next === null || p.listed_at! < next),
+    );
+    if (train.length < 2 || test.length === 0) continue;
+    const fit = fitLogLog(train);
+    const { shifts } = categoryShifts(train, fit);
+    const base2 = deriveMultiples(train);
+    const pairs3 = test.map((p) => ({
+      actual: p.mcap_usd!,
+      predicted:
+        p.tvl_usd * fittedMultiple(p.tvl_usd, shifts[p.category ?? 'Other'] ?? 0, fit, MODEL),
+    }));
+    const pairs2 = test.map((p) => ({
+      actual: p.mcap_usd!,
+      predicted:
+        p.tvl_usd * (base2.multiples[p.category ?? 'Other'] ?? base2.global_multiple),
+    }));
+    const s3 = apeSummary(pairs3);
+    const s2 = apeSummary(pairs2);
+    folds.push({
+      cutoff,
+      train_n: train.length,
+      test_n: test.length,
+      median_ape: s3.median_ape,
+      mean_ape: s3.mean_ape,
+      within_2x: s3.within_2x,
+      within_1_5x: s3.within_1_5x,
+      radar2_median_ape: s2.median_ape,
+      radar2_within_2x: s2.within_2x,
+    });
+    pooled3.push(...pairs3);
+    pooled2.push(...pairs2);
+  }
+  const s3 = apeSummary(pooled3);
+  const s2 = apeSummary(pooled2);
+  return {
+    method: 'walk-forward (expanding window, annual folds)',
+    cutoffs: folds.map((f) => f.cutoff),
+    n: pooled3.length,
+    undated_excluded: live.length - dated.length,
+    median_ape: s3.median_ape,
+    mean_ape: s3.mean_ape,
+    within_2x: s3.within_2x,
+    within_1_5x: s3.within_1_5x,
+    radar2_median_ape: s2.median_ape,
+    radar2_mean_ape: s2.mean_ape,
+    radar2_within_2x: s2.within_2x,
+    radar2_within_1_5x: s2.within_1_5x,
+    folds,
+  };
+}
+
+/** How many bootstrap refits the rank ranges rest on. */
+export const BOOTSTRAP_REFITS = 200;
+
+/**
+ * Fixed seed for the bootstrap resampler: the same snapshot always rebuilds to the same
+ * board, so the dossier's byte comparison holds.
+ */
+export const BOOTSTRAP_SEED = 20261119;
+
+/** A small deterministic PRNG (mulberry32), so bootstrap resamples are reproducible. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** One row's bootstrap rank range. */
+export interface RankRange {
+  rank_low: number;
+  rank_median: number;
+  rank_high: number;
+}
+
+/**
+ * Bootstrap rank ranges: refit the log-log model on BOOTSTRAP_REFITS resamples (drawn with
+ * replacement, same size) of the live comparables, reprice every scored row under each
+ * refit with that refit's multiple (the row's own growth and maturity multipliers do not
+ * depend on the fit, so they carry over unchanged), and re-rank the board the same way
+ * buildBoard ranks it (implied value descending, slug ascending on a tie). The range is
+ * the 5th-95th percentile of the row's ranks across the refits, with the median rank
+ * alongside. The point rank and implied value are never touched: the range is additional
+ * evidence about how much the ranking moves when the fit's sample moves. The 5th-95th
+ * range is widened just enough to include the point rank when it falls outside it, so
+ * rank_low <= rank <= rank_high always holds.
+ */
+export function bootstrapRankRanges(
+  protocols: SnapshotProtocol[],
+  scored: { p: SnapshotProtocol; implied: number; growthMult: number; maturityMult: number }[],
+): Map<string, RankRange> {
+  const live = liveForFit(protocols);
+  const n = scored.length;
+  const ranks: number[][] = scored.map(() => []);
+  const rng = mulberry32(BOOTSTRAP_SEED);
+  for (let b = 0; b < BOOTSTRAP_REFITS; b++) {
+    const sample: SnapshotProtocol[] = [];
+    for (let i = 0; i < live.length; i++) sample.push(live[Math.floor(rng() * live.length)]!);
+    const fit = fitLogLog(sample);
+    const { shifts } = categoryShifts(sample, fit);
+    const impliedB = scored.map((s) => {
+      const shift = shifts[s.p.category ?? 'Other'] ?? 0;
+      const mult = fittedMultiple(s.p.tvl_usd, shift, fit, MODEL);
+      return Math.max(1, Math.round(s.p.tvl_usd * mult * s.growthMult * s.maturityMult));
+    });
+    const order = scored
+      .map((_, i) => i)
+      .sort(
+        (a, c) =>
+          impliedB[c]! - impliedB[a]! ||
+          (scored[a]!.p.slug < scored[c]!.p.slug ? -1 : scored[a]!.p.slug > scored[c]!.p.slug ? 1 : 0),
+      );
+    for (let r = 0; r < n; r++) ranks[order[r]!]!.push(r + 1);
+  }
+  const out = new Map<string, RankRange>();
+  for (let i = 0; i < n; i++) {
+    const rs = [...ranks[i]!].sort((a, b) => a - b);
+    const pointRank = i + 1;
+    out.set(scored[i]!.p.slug, {
+      rank_low: Math.min(Math.round(percentile(rs, 0.05)), pointRank),
+      rank_median: Math.round(percentile(rs, 0.5)),
+      rank_high: Math.max(Math.round(percentile(rs, 0.95)), pointRank),
+    });
+  }
+  return out;
 }
 
 /** The three multipliers and the implied value one protocol gets under `model`. */
@@ -670,8 +938,17 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants): BoardRow[
     return { p, implied, multiple, growthPct, growthMult, maturityMult, age };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
-  return scored.map((s, i) => ({
+  // The rank ranges ride on the scored rows, at full precision: a refit only reprices the
+  // multiple, so the growth and maturity multipliers carry over unchanged. The point ranks
+  // and implied values above are untouched; the ranges are additional evidence.
+  const ranges = bootstrapRankRanges(snapshot.protocols, scored);
+  return scored.map((s, i) => {
+    const net = farmNet(s.p, s.age, s.implied);
+    return {
     rank: i + 1,
+    rank_low: ranges.get(s.p.slug)!.rank_low,
+    rank_median: ranges.get(s.p.slug)!.rank_median,
+    rank_high: ranges.get(s.p.slug)!.rank_high,
     slug: s.p.slug,
     name: s.p.name,
     category: s.p.category,
@@ -685,6 +962,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants): BoardRow[
     token_status: 'pre-token',
     age_days: s.age,
     implied_value_usd: s.implied,
+    farm_net_usd: net.net_usd,
+    farm_verdict: net.verdict,
     model: {
       multiple: round4(s.multiple),
       growth_pct: s.growthPct,
@@ -693,7 +972,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants): BoardRow[
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age, s.implied).map(stepText),
-  }));
+    };
+  });
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
@@ -928,6 +1208,87 @@ function riskFor(
 }
 
 /**
+ * The gas a chain charges, in USD, as numbers: the same table gasFor states in words.
+ * The setup figure is the one-off gas the farm plan's fourth step already states ("about $8
+ * of gas" on Ethereum); the weekly figure is the plan's weekly gas. "Under $1" is read as $1
+ * and "a few cents" as $0.05, the top of each stated range, so the net is never flattered.
+ */
+function gasUsdFor(chain: string): { setup: number; weekly: number } {
+  const c = chain.toLowerCase();
+  if (c === 'ethereum') return { setup: 8, weekly: 3 };
+  if (c === 'solana') return { setup: 1, weekly: 0.05 };
+  if (c === 'binance' || c === 'bsc') return { setup: 1, weekly: 0.5 };
+  if (
+    c === 'base' ||
+    c === 'arbitrum' ||
+    c === 'optimism' ||
+    c === 'zksync era' ||
+    c === 'linea' ||
+    c === 'blast' ||
+    c === 'scroll' ||
+    c === 'mantle' ||
+    c === 'mode' ||
+    c === 'polygon' ||
+    c === 'monad' ||
+    c === 'berachain' ||
+    c === 'sonic'
+  ) {
+    return { setup: 2, weekly: 1 };
+  }
+  return { setup: 4, weekly: 2 };
+}
+
+/** A signed dollar figure with cents, for the netting sentence in the last farm step. */
+function fmtSignedUsd(n: number): string {
+  return `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`;
+}
+
+/** The farm verdict: Farm is clearly worth farming, Thin is marginal, Skip is not worth it. */
+export type FarmVerdict = 'Farm' | 'Thin' | 'Skip';
+
+/**
+ * Farm-plan netting: the net expected value of farming one row, and its verdict.
+ * Formula: net = (deposit / TVL) x implied value - gas.
+ * - deposit is the farm plan's own capitalFor tier ($50 below $100M TVL, $100 below $1B,
+ *   $150 below $5B, $250 at $5B or more), so the stake scales with protocol size.
+ * - implied value is the model's own number for the row.
+ * - gas is the setup gas the plan states for the cheapest chain plus the weekly gas over
+ *   the hold, weeks = ceil(holdDays / 7): a 30-day hold pays 5 weeks, 45 days 7, 60 days 9.
+ * Assumptions, stated plainly: the airdrop is shared pro-rata by deposit, so a $150 deposit
+ * in a $2.75B protocol earns 150 / 2,750,000,000 of the implied value; the airdrop is paid in
+ * full at the implied value; gas is charged at the plan's stated upper bounds; the farm earns
+ * no yield, no points multiplier and no price move, and the deposit itself is returned.
+ * That pro-rata share is why the biggest protocols net the least: implied value grows with
+ * the square root of TVL (the log-log slope is 0.472), so the share per dollar falls as TVL
+ * rises, while the deposit tier only doubles from $50 to $250 across the whole board.
+ * Verdicts, from the net distribution on the 2026-11-14 snapshot (median $2.72, 75th
+ * percentile $9.35, 90th $16.32, range -$27.38 to $42.90): net of $10 or more is Farm, about
+ * the top quarter of rows; $0 to $10 is Thin, a gain but under a fifth of the smallest $50
+ * deposit, easily wiped out by one extra transaction; below $0 is Skip, the farm costs more
+ * than the share is worth. Fully deterministic: same snapshot, same net and verdict.
+ */
+export function farmNet(
+  p: SnapshotProtocol,
+  age: number | null,
+  implied: number,
+): { net_usd: number; verdict: FarmVerdict; deposit_usd: number; gross_usd: number; gas_usd: number } {
+  const deposit = capitalFor(p);
+  const gas = gasUsdFor(cheapestTwo(p.chains).first);
+  const weeks = Math.ceil(holdDaysFor(age) / 7);
+  const gasUsd = gas.setup + gas.weekly * weeks;
+  const gross = (deposit / p.tvl_usd) * implied;
+  const net = Math.round((gross - gasUsd) * 100) / 100;
+  const verdict: FarmVerdict = net >= 10 ? 'Farm' : net >= 0 ? 'Thin' : 'Skip';
+  return {
+    net_usd: net,
+    verdict,
+    deposit_usd: deposit,
+    gross_usd: Math.round(gross * 100) / 100,
+    gas_usd: Math.round(gasUsd * 100) / 100,
+  };
+}
+
+/**
  * A protocol's farm plan: eight steps, each an action with a cost and a time. The plan is derived
  * from the protocol's own record (category, chains, TVL, 7-day change, age, implied value), never from a
  * hand-written list of names. The dashboard's page generates the same eight steps from the same
@@ -941,6 +1302,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, implied: numb
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const gas = gasFor(chain);
+  const net = farmNet(p, age, implied);
   const where = secondChain !== null ? `${startChain} and ${secondChain}` : chain;
   return [
     {
@@ -971,7 +1333,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, implied: numb
       time: '10 minutes',
     },
     {
-      text: `The model puts ${p.name} at ${fmtUsd(implied)} of implied value: re-check the board each month and unwind if the protocol's TVL falls by half or its points page goes quiet. Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.`,
+      text: `The model puts ${p.name} at ${fmtUsd(implied)} of implied value. A $${net.deposit_usd} farm here nets ${fmtSignedUsd(net.net_usd)} after gas (expected share ${fmtSignedUsd(net.gross_usd)} minus ${fmtSignedUsd(net.gas_usd)} gas), so the verdict is ${net.verdict}: re-check the board each month and unwind if TVL halves or the points page goes quiet.`,
       cost: 'nothing but the log',
       time: '5 minutes',
     },
@@ -1001,6 +1363,9 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
   return {
     rank: row.rank,
+    rank_low: row.rank_low,
+    rank_median: row.rank_median,
+    rank_high: row.rank_high,
     slug: row.slug,
     name: row.name,
     category: row.category,
@@ -1011,6 +1376,8 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    farm_net_usd: row.farm_net_usd,
+    farm_verdict: row.farm_verdict,
     multiple: row.model.multiple,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,

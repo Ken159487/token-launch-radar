@@ -49,7 +49,8 @@ const snapshot = parseSnapshot(readFileSync(inputFile, 'utf8'));
 // over the live protocols (exchanges excluded), with a per-category intercept shift for each
 // category with enough live names. Nothing here is a number typed in by hand. The validation
 // is leave-one-out over the same live set, against the radar-2 baseline, so the board's
-// numbers carry their own error bars.
+// numbers carry their own error bars. A walk-forward test and bootstrap rank ranges ride on
+// the same fit; see lib/model.ts.
 const { regression, category_shifts, shift_counts, multiples, multiple_counts, global_multiple, live_count } =
   deriveRegression(snapshot.protocols);
 const validation = validateModel(snapshot.protocols);
@@ -112,6 +113,7 @@ process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside), model ${MODEL_VERSION}\n` +
     `token radar: log(mcap) = ${regression.intercept.toFixed(3)} + ${regression.slope.toFixed(3)} x log(TVL), R2 = ${regression.r_squared.toFixed(3)}, n = ${regression.n} live protocols (exchanges excluded)\n` +
     `token radar: leave-one-out (n=${validation.n}): radar-3 median APE ${(validation.median_ape * 100).toFixed(1)}%, within 2x ${(validation.within_2x * 100).toFixed(1)}%; radar-2 median APE ${(validation.radar2_median_ape * 100).toFixed(1)}%, within 2x ${(validation.radar2_within_2x * 100).toFixed(1)}%\n` +
+    `token radar: walk-forward (n=${validation.walk_forward.n}, folds ${validation.walk_forward.cutoffs.join(', ')}): radar-3 median APE ${(validation.walk_forward.median_ape * 100).toFixed(1)}%, within 2x ${(validation.walk_forward.within_2x * 100).toFixed(1)}%; radar-2 median APE ${(validation.walk_forward.radar2_median_ape * 100).toFixed(1)}%, within 2x ${(validation.walk_forward.radar2_within_2x * 100).toFixed(1)}%\n` +
     `token radar: fitted multiple at each category's median live TVL: ` +
     Object.entries(multiples)
       .sort((a, b) => b[1] - a[1])
